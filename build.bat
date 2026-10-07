@@ -1,5 +1,5 @@
 @echo off
-rem Builds Build\myeditor.exe with the MSVC toolchain (VS 2019/2022 or Build Tools).
+rem Builds Build\ditto.exe with the MSVC toolchain (VS 2019/2022 or Build Tools).
 setlocal
 cd /d "%~dp0"
 
@@ -24,11 +24,11 @@ if errorlevel 1 exit /b 1
 
 cl /nologo /std:c++17 /O2 /MT /W4 /EHsc /permissive- /utf-8 /MP /DUNICODE /D_UNICODE ^
    /wd4100 /wd4201 /wd4996 ^
-   /Fo:Build\obj\ /Fe:Build\myeditor.exe src\*.cpp Build\obj\app.res ^
+   /Fo:Build\obj\ /Fe:Build\ditto.exe src\*.cpp Build\obj\app.res ^
    /link /SUBSYSTEM:WINDOWS /OPT:REF /OPT:ICF ^
    user32.lib gdi32.lib comctl32.lib comdlg32.lib shell32.lib ole32.lib uuid.lib ^
    dwmapi.lib winhttp.lib imm32.lib uxtheme.lib advapi32.lib shlwapi.lib
 if errorlevel 1 exit /b 1
 
 echo.
-echo Built Build\myeditor.exe
+echo Built Build\ditto.exe

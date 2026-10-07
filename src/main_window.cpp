@@ -73,6 +73,7 @@ void ApplyThemeAll() {
         SetWindowTheme(t.hwnd, g_settings.dark ? L"DarkMode_Explorer" : L"Explorer", nullptr);
         if (t.kind == Tab::Log) LogView::ThemeChanged(t.hwnd);
     }
+    DrawMenuBar(M.hwnd);
     RedrawWindow(M.hwnd, nullptr, nullptr, RDW_INVALIDATE | RDW_ERASE | RDW_ALLCHILDREN | RDW_FRAME);
 }
 
@@ -184,7 +185,7 @@ void UpdateTitle() {
         t += L" - ";
     }
     if (!M.folder.empty()) t += FileNameOf(M.folder) + L" - ";
-    t += L"myeditor";
+    t += L"ditto";
     SetWindowTextW(M.hwnd, t.c_str());
 }
 
@@ -381,7 +382,7 @@ static void PaintWelcome(HDC dc) {
     lf.lfHeight = lf.lfHeight * 2;
     lf.lfWeight = FW_LIGHT;
     HFONT big = CreateFontIndirectW(&lf);
-    Text(dc, L"myeditor", r, t.fg, DT_LEFT | DT_TOP | DT_SINGLELINE, big);
+    Text(dc, L"ditto", r, t.fg, DT_LEFT | DT_TOP | DT_SINGLELINE, big);
     DeleteObject(big);
     y += S(56);
     const wchar_t* lines[] = {
@@ -496,6 +497,39 @@ static void OverflowMenu() {
     if (cmd > 0) ActivateTab(cmd - 1);
 }
 
+// ---------------- dark menu bar ----------------
+// The native menu bar ignores DWM dark mode and stays white, so in dark mode it is painted by hand.
+// WM_UAHDRAWMENU / WM_UAHDRAWMENUITEM are the undocumented messages Windows uses for that bar.
+static const UINT kWmUahDrawMenu = 0x0091;
+static const UINT kWmUahDrawMenuItem = 0x0092;
+
+struct UahMenu { HMENU hmenu; HDC hdc; DWORD dwFlags; };
+struct UahDrawMenuItem { DRAWITEMSTRUCT dis; UahMenu um; int iPosition; };
+
+static void PaintMenuBar(HWND h, const UahMenu* um) {
+    MENUBARINFO mbi = {sizeof(mbi)};
+    if (!GetMenuBarInfo(h, OBJID_MENU, 0, &mbi)) return;
+    RECT win;
+    GetWindowRect(h, &win);
+    RECT r = mbi.rcBar;  // screen coordinates, the DC is window-relative
+    OffsetRect(&r, -win.left, -win.top);
+    FillC(um->hdc, r, g_theme.panelBg);
+}
+
+static void PaintMenuItem(const UahDrawMenuItem* d) {
+    wchar_t text[256] = {};
+    GetMenuStringW(d->um.hmenu, (UINT)d->iPosition, text, 256, MF_BYPOSITION);
+    HDC dc = d->dis.hDC;
+    RECT r = d->dis.rcItem;
+    bool hot = (d->dis.itemState & (ODS_HOTLIGHT | ODS_SELECTED)) != 0;
+    FillC(dc, r, hot ? g_theme.hoverBg : g_theme.panelBg);
+    HGDIOBJ old = SelectObject(dc, g_uiFont);
+    SetBkMode(dc, TRANSPARENT);
+    SetTextColor(dc, (d->dis.itemState & ODS_GRAYED) ? g_theme.panelFgDim : g_theme.panelFg);
+    DrawTextW(dc, text, -1, &r, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+    SelectObject(dc, old);
+}
+
 static LRESULT CALLBACK MainProc(HWND h, UINT m, WPARAM w, LPARAM l) {
     switch (m) {
     case WM_CREATE:
@@ -507,6 +541,12 @@ static LRESULT CALLBACK MainProc(HWND h, UINT m, WPARAM w, LPARAM l) {
         return 0;
     case WM_ERASEBKGND:
         return 1;
+    case kWmUahDrawMenu:
+        if (g_settings.dark) { PaintMenuBar(h, (const UahMenu*)l); return 0; }
+        break;
+    case kWmUahDrawMenuItem:
+        if (g_settings.dark) { PaintMenuItem((const UahDrawMenuItem*)l); return 0; }
+        break;
     case WM_PAINT: {
         PAINTSTRUCT ps;
         HDC dc = BeginPaint(h, &ps);
@@ -892,7 +932,7 @@ HWND CreateMainWindow() {
     wc.hIcon = LoadIconW(g_hinst, MAKEINTRESOURCEW(IDI_APP));
     wc.hIconSm = (HICON)LoadImageW(g_hinst, MAKEINTRESOURCEW(IDI_APP), IMAGE_ICON, GetSystemMetrics(SM_CXSMICON),
                                    GetSystemMetrics(SM_CYSMICON), 0);
-    wc.lpszClassName = L"MyEditorMain";
+    wc.lpszClassName = L"DittoMain";
     RegisterClassExW(&wc);
     EditorView::Register();
     DiffView::Register();
@@ -900,7 +940,7 @@ HWND CreateMainWindow() {
 
     M.menu = BuildMenu();
     M.accel = BuildAccel();
-    HWND h = CreateWindowExW(WS_EX_ACCEPTFILES, L"MyEditorMain", L"myeditor", WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN,
+    HWND h = CreateWindowExW(WS_EX_ACCEPTFILES, L"DittoMain", L"ditto", WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN,
                              g_settings.winX, g_settings.winY, g_settings.winW, g_settings.winH, nullptr, M.menu, g_hinst, nullptr);
     if (!h) return nullptr;
     g_dpi = (int)GetDpiForWindow(h);

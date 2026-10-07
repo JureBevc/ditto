@@ -1,4 +1,4 @@
-// myeditor entry point
+// ditto entry point
 #include "main_window.h"
 #include <objbase.h>
 

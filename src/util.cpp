@@ -107,27 +107,27 @@ void ApplyTheme(bool dark) {
         t.emptyBg = RGB(37, 37, 38); t.hunkFg = RGB(140, 140, 200);
         t.panelBg = RGB(37, 37, 38); t.panelFg = RGB(204, 204, 204); t.panelFgDim = RGB(140, 140, 140);
         t.border = RGB(60, 60, 60); t.accent = RGB(0, 122, 204); t.hoverBg = RGB(55, 55, 58);
-        t.activeBg = RGB(30, 30, 30); t.inputBg = RGB(49, 49, 49); t.buttonBg = RGB(14, 99, 156);
-        t.buttonFg = RGB(255, 255, 255); t.statusBg = RGB(0, 122, 204); t.statusFg = RGB(255, 255, 255);
+        t.activeBg = RGB(30, 30, 30); t.inputBg = RGB(49, 49, 49); t.buttonBg = RGB(62, 70, 84);
+        t.buttonFg = RGB(224, 224, 224); t.statusBg = RGB(45, 45, 48); t.statusFg = RGB(190, 190, 190);
     }
 }
 
-static std::wstring IniPath() { return JoinPath(ExeDir(), L"myeditor.ini"); }
+static std::wstring IniPath() { return JoinPath(ExeDir(), L"ditto.ini"); }
 
 static int IniInt(const wchar_t* key, int def) {
     // GetPrivateProfileInt can't read negative numbers (window positions on left monitors, CW_USEDEFAULT)
     wchar_t buf[64];
-    GetPrivateProfileStringW(L"myeditor", key, L"", buf, 64, IniPath().c_str());
+    GetPrivateProfileStringW(L"ditto", key, L"", buf, 64, IniPath().c_str());
     if (!buf[0]) return def;
     return (int)wcstol(buf, nullptr, 10);
 }
 static std::wstring IniStr(const wchar_t* key, const wchar_t* def) {
     wchar_t buf[1024];
-    GetPrivateProfileStringW(L"myeditor", key, def, buf, 1024, IniPath().c_str());
+    GetPrivateProfileStringW(L"ditto", key, def, buf, 1024, IniPath().c_str());
     return buf;
 }
 static void IniSet(const wchar_t* key, const std::wstring& v) {
-    WritePrivateProfileStringW(L"myeditor", key, v.c_str(), IniPath().c_str());
+    WritePrivateProfileStringW(L"ditto", key, v.c_str(), IniPath().c_str());
 }
 
 void LoadSettings() {
@@ -243,7 +243,7 @@ std::wstring FormatError(DWORD err) {
 }
 
 int MsgBox(HWND owner, const std::wstring& text, UINT flags) {
-    return MessageBoxW(owner ? owner : g_mainWnd, text.c_str(), L"myeditor", flags);
+    return MessageBoxW(owner ? owner : g_mainWnd, text.c_str(), L"ditto", flags);
 }
 
 void RunOnUi(std::function<void()> fn) {

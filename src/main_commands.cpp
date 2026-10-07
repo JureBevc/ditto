@@ -103,7 +103,7 @@ HMENU BuildMenu() {
     g_gitMenu = g;
 
     HMENU hm = CreatePopupMenu();
-    AppendMenuW(hm, MF_STRING, ID_HELP_ABOUT, L"&About myeditor");
+    AppendMenuW(hm, MF_STRING, ID_HELP_ABOUT, L"&About ditto");
     AppendMenuW(bar, MF_POPUP, (UINT_PTR)hm, L"&Help");
     return bar;
 }
@@ -378,7 +378,7 @@ void OnCommand(int id) {
         break;
     case ID_HELP_ABOUT:
         MsgBox(M.hwnd,
-               L"myeditor 1.0\n\nA lightweight text editor with Markdown highlighting and a built-in git client.\n\n"
+               L"ditto 1.0\n\nA lightweight text editor with Markdown highlighting and a built-in git client.\n\n"
                L"Large files are memory-mapped and indexed in the background, so multi-gigabyte files open instantly.\n\n"
                L"Git: " + GitExe(),
                MB_OK | MB_ICONINFORMATION);

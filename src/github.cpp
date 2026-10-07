@@ -59,8 +59,8 @@ std::string JsonStr(const std::string& json, const char* key) {
 int HttpRequest(const wchar_t* method, const wchar_t* path, const std::string& token, const std::string& body, std::string& resp,
                 std::wstring& err) {
     resp.clear();
-    HINTERNET s = WinHttpOpen(L"myeditor/1.0", WINHTTP_ACCESS_TYPE_AUTOMATIC_PROXY, WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0);
-    if (!s) s = WinHttpOpen(L"myeditor/1.0", WINHTTP_ACCESS_TYPE_DEFAULT_PROXY, WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0);
+    HINTERNET s = WinHttpOpen(L"ditto/1.0", WINHTTP_ACCESS_TYPE_AUTOMATIC_PROXY, WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0);
+    if (!s) s = WinHttpOpen(L"ditto/1.0", WINHTTP_ACCESS_TYPE_DEFAULT_PROXY, WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0);
     if (!s) { err = FormatError(GetLastError()); return -1; }
     int status = -1;
     HINTERNET c = WinHttpConnect(s, L"api.github.com", INTERNET_DEFAULT_HTTPS_PORT, 0);

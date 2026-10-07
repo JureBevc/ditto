@@ -1,4 +1,4 @@
-// myeditor - shared declarations
+// ditto - shared declarations
 #pragma once
 #ifndef UNICODE
 #define UNICODE
@@ -55,7 +55,7 @@ struct Theme {
 extern Theme g_theme;
 void ApplyTheme(bool dark);
 
-// ---- settings (myeditor.ini next to the exe) ----
+// ---- settings (ditto.ini next to the exe) ----
 struct Settings {
     std::wstring fontName = L"Consolas";
     int fontSize = 11;
