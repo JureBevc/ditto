@@ -1,0 +1,30 @@
+# Build output (ditto.exe, ditto.ini, object files)
+Build/
+
+# Visual Studio / MSVC
+.vs/
+*.user
+*.suo
+*.sdf
+*.opensdf
+*.db
+*.ipch
+*.obj
+*.pdb
+*.ilk
+*.exp
+*.lib
+*.idb
+*.iobj
+*.ipdb
+*.tlog/
+*.log
+*.res
+
+# Editor and OS junk
+.vscode/
+.idea/
+*.swp
+*~
+Thumbs.db
+Desktop.ini
