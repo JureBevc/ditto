@@ -1,0 +1,81 @@
+#include <windows.h>
+#include <commctrl.h>
+#include "../src/resource.h"
+
+IDI_APP ICON "app.ico"
+CREATEPROCESS_MANIFEST_RESOURCE_ID RT_MANIFEST "app.manifest"
+
+VS_VERSION_INFO VERSIONINFO
+ FILEVERSION 1,0,0,0
+ PRODUCTVERSION 1,0,0,0
+ FILEOS VOS_NT_WINDOWS32
+ FILETYPE VFT_APP
+BEGIN
+    BLOCK "StringFileInfo"
+    BEGIN
+        BLOCK "040904b0"
+        BEGIN
+            VALUE "FileDescription", "myeditor - lightweight text editor and git client"
+            VALUE "FileVersion", "1.0.0"
+            VALUE "ProductName", "myeditor"
+            VALUE "ProductVersion", "1.0.0"
+            VALUE "OriginalFilename", "myeditor.exe"
+        END
+    END
+    BLOCK "VarFileInfo"
+    BEGIN
+        VALUE "Translation", 0x409, 1200
+    END
+END
+
+IDD_INPUT DIALOGEX 0, 0, 280, 74
+STYLE DS_SETFONT | DS_MODALFRAME | DS_CENTER | WS_POPUP | WS_CAPTION | WS_SYSMENU
+CAPTION "Input"
+FONT 9, "Segoe UI", 400, 0, 0x1
+BEGIN
+    LTEXT           "", IDC_PROMPT, 7, 7, 266, 18
+    EDITTEXT        IDC_EDIT, 7, 28, 266, 14, ES_AUTOHSCROLL
+    DEFPUSHBUTTON   "OK", IDOK, 169, 52, 50, 14
+    PUSHBUTTON      "Cancel", IDCANCEL, 223, 52, 50, 14
+END
+
+IDD_PICK DIALOGEX 0, 0, 280, 200
+STYLE DS_SETFONT | DS_MODALFRAME | DS_CENTER | WS_POPUP | WS_CAPTION | WS_SYSMENU
+CAPTION "Select"
+FONT 9, "Segoe UI", 400, 0, 0x1
+BEGIN
+    LTEXT           "", IDC_PROMPT, 7, 7, 266, 10
+    EDITTEXT        IDC_EDIT, 7, 20, 266, 14, ES_AUTOHSCROLL
+    LISTBOX         IDC_LIST, 7, 38, 266, 134, LBS_NOTIFY | LBS_NOINTEGRALHEIGHT | WS_VSCROLL | WS_TABSTOP
+    DEFPUSHBUTTON   "OK", IDOK, 169, 178, 50, 14
+    PUSHBUTTON      "Cancel", IDCANCEL, 223, 178, 50, 14
+END
+
+IDD_PUBLISH DIALOGEX 0, 0, 280, 122
+STYLE DS_SETFONT | DS_MODALFRAME | DS_CENTER | WS_POPUP | WS_CAPTION | WS_SYSMENU
+CAPTION "Publish to GitHub"
+FONT 9, "Segoe UI", 400, 0, 0x1
+BEGIN
+    LTEXT           "Repository name:", -1, 7, 7, 266, 10
+    EDITTEXT        IDC_EDIT, 7, 18, 266, 14, ES_AUTOHSCROLL
+    LTEXT           "Description (optional):", -1, 7, 38, 266, 10
+    EDITTEXT        IDC_EDIT2, 7, 49, 266, 14, ES_AUTOHSCROLL
+    CONTROL         "Private repository", IDC_PRIVATE, "Button", BS_AUTORADIOBUTTON | WS_GROUP | WS_TABSTOP, 7, 70, 140, 10
+    CONTROL         "Public repository", IDC_PUBLIC, "Button", BS_AUTORADIOBUTTON, 7, 83, 140, 10
+    DEFPUSHBUTTON   "Publish", IDOK, 169, 102, 50, 14
+    PUSHBUTTON      "Cancel", IDCANCEL, 223, 102, 50, 14
+END
+
+IDD_CLONE DIALOGEX 0, 0, 280, 96
+STYLE DS_SETFONT | DS_MODALFRAME | DS_CENTER | WS_POPUP | WS_CAPTION | WS_SYSMENU
+CAPTION "Clone Repository"
+FONT 9, "Segoe UI", 400, 0, 0x1
+BEGIN
+    LTEXT           "Repository URL:", -1, 7, 7, 266, 10
+    EDITTEXT        IDC_EDIT, 7, 18, 266, 14, ES_AUTOHSCROLL
+    LTEXT           "Clone into parent folder:", -1, 7, 38, 266, 10
+    EDITTEXT        IDC_EDIT2, 7, 49, 236, 14, ES_AUTOHSCROLL
+    PUSHBUTTON      "...", IDC_BROWSE, 247, 49, 26, 14
+    DEFPUSHBUTTON   "Clone", IDOK, 169, 74, 50, 14
+    PUSHBUTTON      "Cancel", IDCANCEL, 223, 74, 50, 14
+END
