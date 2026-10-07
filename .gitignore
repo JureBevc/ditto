@@ -1,5 +1,6 @@
 # Build output (ditto.exe, ditto.ini, object files)
 Build/
+Local/
 
 # Visual Studio / MSVC
 .vs/
