@@ -145,6 +145,23 @@ void Push(bool force) {
     RunGitOp(L"Push", St().root, {args}, false);
 }
 
+// Commits every change as "Update"; with a clean tree it pushes instead (matches the panel button).
+void QuickCommit() {
+    if (!RequireRepo()) return;
+    if (St().files.empty()) { Push(false); return; }
+    std::wstring root = St().root;
+    App::SetStatusText(L"Committing...");
+    BgRun([root]() {
+        ProcResult r = Git(root, {L"add", L"-A"});
+        if (r.code == 0) r = Git(root, {L"commit", L"-m", L"Update"});
+        RunOnUi([r]() {
+            App::SetStatusText(r.code == 0 ? L"" : L"Commit failed");
+            if (r.code != 0) MsgBox(App::Main(), L"Commit failed:\n\n" + GitErrorText(r), MB_ICONERROR);
+            App::RefreshGit();
+        });
+    });
+}
+
 void Pull() {
     if (!RequireRepo()) return;
     if (St().upstream.empty()) {
@@ -421,6 +438,7 @@ void GitCommand(int id) {
     case ID_GIT_COMMIT_ALL:
     case ID_GIT_COMMIT_AMEND: Commit(id); break;
     case ID_GIT_UNDO_COMMIT: UndoCommit(); break;
+    case ID_GIT_QUICK_COMMIT: QuickCommit(); break;
     case ID_GIT_PUSH: Push(false); break;
     case ID_GIT_PUSH_FORCE: Push(true); break;
     case ID_GIT_PULL: Pull(); break;

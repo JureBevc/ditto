@@ -5,7 +5,7 @@
 namespace {
 
 enum {
-    IDC_MSG = 2001, IDC_COMMIT, IDC_COMMITMENU, IDC_REFRESH, IDC_MORE, IDC_INIT, IDC_CLONE, IDC_OPENFOLDER, IDC_PUBLISH,
+    IDC_MSG = 2001, IDC_COMMIT, IDC_COMMITMENU, IDC_QUICK, IDC_REFRESH, IDC_MORE, IDC_INIT, IDC_CLONE, IDC_OPENFOLDER, IDC_PUBLISH,
 };
 enum Group { G_MERGE, G_STAGED, G_CHANGES, G_COUNT };
 const wchar_t* kGroupNames[G_COUNT] = {L"MERGE CHANGES", L"STAGED CHANGES", L"CHANGES"};
@@ -27,7 +27,7 @@ struct Row {
 };
 
 struct State {
-    HWND hwnd = nullptr, msg, commit, commitMenu, refresh, more, init, clone, openFolder, publish, list;
+    HWND hwnd = nullptr, msg, commit, commitMenu, quick, refresh, more, init, clone, openFolder, publish, list;
     HBRUSH inputBrush = nullptr;
     GitStatus st;
     std::vector<Row> rows;
@@ -561,7 +561,7 @@ void Layout() {
     int y = hh;
     ShowWindow(P.msg, repo ? SW_SHOW : SW_HIDE);
     ShowWindow(P.commit, repo ? SW_SHOW : SW_HIDE);
-    ShowWindow(P.commitMenu, repo ? SW_SHOW : SW_HIDE);
+    ShowWindow(P.quick, repo ? SW_SHOW : SW_HIDE);
     ShowWindow(P.list, repo ? SW_SHOW : SW_HIDE);
     ShowWindow(P.init, !repo && folder ? SW_SHOW : SW_HIDE);
     ShowWindow(P.publish, !repo && folder ? SW_SHOW : SW_HIDE);
@@ -574,6 +574,8 @@ void Layout() {
         int ch = S(28), mw = S(28);
         MoveWindow(P.commit, pad, y, W - 2 * pad - mw - S(2), ch, TRUE);
         MoveWindow(P.commitMenu, W - pad - mw, y, mw, ch, TRUE);
+        y += ch + S(8);
+        MoveWindow(P.quick, pad, y, W - 2 * pad, ch, TRUE);
         y += ch + S(8);
         MoveWindow(P.list, 0, y, W, std::max(0, (int)rc.bottom - y), TRUE);
     } else {
@@ -676,14 +678,16 @@ LRESULT CALLBACK PanelProc(HWND h, UINT m, WPARAM w, LPARAM l) {
     }
     case WM_DRAWITEM: {
         auto* dis = (DRAWITEMSTRUCT*)l;
-        DrawFlatButton(dis, dis->CtlID == IDC_COMMIT || dis->CtlID == IDC_COMMITMENU || dis->CtlID == IDC_INIT ||
-                                dis->CtlID == IDC_OPENFOLDER || dis->CtlID == IDC_PUBLISH || dis->CtlID == IDC_CLONE);
+        DrawFlatButton(dis, dis->CtlID == IDC_COMMIT || dis->CtlID == IDC_COMMITMENU || dis->CtlID == IDC_QUICK ||
+                                dis->CtlID == IDC_INIT || dis->CtlID == IDC_OPENFOLDER || dis->CtlID == IDC_PUBLISH ||
+                                dis->CtlID == IDC_CLONE);
         return TRUE;
     }
     case WM_COMMAND:
         switch (LOWORD(w)) {
         case IDC_COMMIT: GitCommand(ID_GIT_COMMIT); break;
         case IDC_COMMITMENU: ShowMenu(P.commitMenu, true); break;
+        case IDC_QUICK: GitCommand(ID_GIT_QUICK_COMMIT); break;
         case IDC_MORE: ShowMenu(P.more, false); break;
         case IDC_REFRESH: App::RefreshGit(); break;
         case IDC_INIT: GitCommand(ID_GIT_INIT); break;
@@ -730,6 +734,7 @@ HWND Create(HWND parent) {
     SetWindowSubclass(P.msg, MsgEditSub, 1, 0);
     P.commit = MakeButton(P.hwnd, IDC_COMMIT, L"\x2713  Commit");
     P.commitMenu = MakeButton(P.hwnd, IDC_COMMITMENU, kIcoDown);
+    P.quick = MakeButton(P.hwnd, IDC_QUICK, L"Quick Commit");
     P.refresh = MakeButton(P.hwnd, IDC_REFRESH, kIcoRefresh);
     P.more = MakeButton(P.hwnd, IDC_MORE, kIcoMore);
     P.init = MakeButton(P.hwnd, IDC_INIT, L"Initialize Repository");
@@ -742,6 +747,7 @@ HWND Create(HWND parent) {
     AddTip(tip, P.refresh, L"Refresh");
     AddTip(tip, P.more, L"More Actions...");
     AddTip(tip, P.commitMenu, L"More Commit Actions...");
+    AddTip(tip, P.quick, L"Commit all changes as \"Update\", or push when there is nothing to commit");
     Layout();
     return P.hwnd;
 }
@@ -749,8 +755,8 @@ HWND Create(HWND parent) {
 void Update(const GitStatus& s) {
     bool wasRepo = P.st.isRepo;
     P.st = s;
-    std::wstring label = L"\x2713  Commit";
-    SetWindowTextW(P.commit, label.c_str());
+    SetWindowTextW(P.commit, L"\x2713  Commit");
+    SetWindowTextW(P.quick, s.files.empty() ? L"Push" : L"Quick Commit");
     RebuildRows();
     if (wasRepo != s.isRepo || true) Layout();
     InvalidateRect(P.msg, nullptr, FALSE);
