@@ -32,6 +32,8 @@ enum : UINT {
     WM_APP_INDEXED,              // TextBuffer -> editor view: background line index finished
     WM_APP_FINDDONE,             // editor search thread finished; lParam = FindResult*
     WM_APP_DOCCHANGED,           // view -> main: caret/modified/progress changed; wParam = HWND of view
+    WM_APP_TERMDATA,             // terminal reader thread -> terminal view: new output is pending
+    WM_APP_TERMEXIT,             // terminal shell process exited
 };
 
 // ---- UTF-8 helpers ----
@@ -63,7 +65,8 @@ struct Settings {
     bool wrap = false;
     int tabSize = 4;
     int sidebarWidth = 260;
-    bool showOutput = false;
+    bool showOutput = false;  // bottom panel (output / terminal) visible
+    int panelHeight = 240;
     bool showSidebar = true;
     int winX = CW_USEDEFAULT, winY = CW_USEDEFAULT, winW = 1200, winH = 800;
     bool winMax = false;

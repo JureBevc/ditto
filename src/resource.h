@@ -60,6 +60,12 @@
 #define ID_VIEW_FONT 40310
 #define ID_VIEW_NEXTTAB 40311
 #define ID_VIEW_PREVTAB 40312
+#define ID_VIEW_TERMINAL 40313
+
+// Terminal
+#define ID_TERM_NEW 40701
+#define ID_TERM_SPLIT 40702
+#define ID_TERM_KILL 40703
 
 // Git
 #define ID_GIT_INIT 40401

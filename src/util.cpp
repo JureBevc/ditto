@@ -139,6 +139,7 @@ void LoadSettings() {
     s.tabSize = std::max(1, std::min(16, IniInt(L"TabSize", 4)));
     s.sidebarWidth = std::max(120, std::min(1200, IniInt(L"SidebarWidth", 260)));
     s.showOutput = IniInt(L"ShowOutput", 0) != 0;
+    s.panelHeight = std::max(60, std::min(2000, IniInt(L"PanelHeight", 240)));
     s.showSidebar = IniInt(L"ShowSidebar", 1) != 0;
     s.winX = IniInt(L"WinX", CW_USEDEFAULT);
     s.winY = IniInt(L"WinY", CW_USEDEFAULT);
@@ -161,6 +162,7 @@ void SaveSettings() {
     IniSet(L"TabSize", std::to_wstring(s.tabSize));
     IniSet(L"SidebarWidth", std::to_wstring(s.sidebarWidth));
     IniSet(L"ShowOutput", s.showOutput ? L"1" : L"0");
+    IniSet(L"PanelHeight", std::to_wstring(s.panelHeight));
     IniSet(L"ShowSidebar", s.showSidebar ? L"1" : L"0");
     IniSet(L"WinX", std::to_wstring(s.winX));
     IniSet(L"WinY", std::to_wstring(s.winY));

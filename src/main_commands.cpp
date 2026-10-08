@@ -3,7 +3,7 @@
 #include "dialogs.h"
 #include "resource.h"
 
-static HMENU g_recentMenu, g_fileMenu, g_editMenu, g_viewMenu, g_gitMenu;
+static HMENU g_recentMenu, g_fileMenu, g_editMenu, g_viewMenu, g_termMenu, g_gitMenu;
 
 HMENU BuildMenu() {
     HMENU bar = CreateMenu();
@@ -51,7 +51,7 @@ HMENU BuildMenu() {
     AppendMenuW(v, MF_STRING, ID_VIEW_EXPLORER, L"&Explorer\tCtrl+Shift+E");
     AppendMenuW(v, MF_STRING, ID_VIEW_SCM, L"&Source Control\tCtrl+Shift+G");
     AppendMenuW(v, MF_STRING, ID_VIEW_SIDEBAR, L"Show Side &Bar\tCtrl+B");
-    AppendMenuW(v, MF_STRING, ID_VIEW_OUTPUT, L"Show &Output\tCtrl+`");
+    AppendMenuW(v, MF_STRING, ID_VIEW_OUTPUT, L"Show &Output\tCtrl+Shift+U");
     AppendMenuW(v, MF_SEPARATOR, 0, nullptr);
     AppendMenuW(v, MF_STRING, ID_VIEW_WRAP, L"&Word Wrap\tAlt+Z");
     AppendMenuW(v, MF_STRING, ID_VIEW_DARK, L"&Dark Theme");
@@ -65,6 +65,15 @@ HMENU BuildMenu() {
     AppendMenuW(v, MF_STRING, ID_VIEW_PREVTAB, L"Pre&vious Tab\tCtrl+Shift+Tab");
     AppendMenuW(bar, MF_POPUP, (UINT_PTR)v, L"&View");
     g_viewMenu = v;
+
+    HMENU tm = CreatePopupMenu();
+    AppendMenuW(tm, MF_STRING, ID_TERM_NEW, L"&New Terminal\tCtrl+Shift+`");
+    AppendMenuW(tm, MF_STRING, ID_TERM_SPLIT, L"&Split Terminal\tCtrl+Shift+5");
+    AppendMenuW(tm, MF_STRING, ID_TERM_KILL, L"&Kill Terminal");
+    AppendMenuW(tm, MF_SEPARATOR, 0, nullptr);
+    AppendMenuW(tm, MF_STRING, ID_VIEW_TERMINAL, L"&Toggle Terminal\tCtrl+`");
+    AppendMenuW(bar, MF_POPUP, (UINT_PTR)tm, L"&Terminal");
+    g_termMenu = tm;
 
     HMENU g = CreatePopupMenu();
     AppendMenuW(g, MF_STRING, ID_GIT_INIT, L"&Initialize Repository");
@@ -127,7 +136,10 @@ HACCEL BuildAccel() {
         {FCONTROL | FSHIFT | FVIRTKEY, 'E', ID_VIEW_EXPLORER},
         {FCONTROL | FSHIFT | FVIRTKEY, 'G', ID_VIEW_SCM},
         {FCONTROL | FVIRTKEY, 'B', ID_VIEW_SIDEBAR},
-        {FCONTROL | FVIRTKEY, VK_OEM_3, ID_VIEW_OUTPUT},
+        {FCONTROL | FSHIFT | FVIRTKEY, 'U', ID_VIEW_OUTPUT},
+        {FCONTROL | FVIRTKEY, VK_OEM_3, ID_VIEW_TERMINAL},
+        {FCONTROL | FSHIFT | FVIRTKEY, VK_OEM_3, ID_TERM_NEW},
+        {FCONTROL | FSHIFT | FVIRTKEY, '5', ID_TERM_SPLIT},
         {FALT | FVIRTKEY, 'Z', ID_VIEW_WRAP},
         {FCONTROL | FVIRTKEY, VK_OEM_PLUS, ID_VIEW_ZOOMIN},
         {FCONTROL | FVIRTKEY, VK_ADD, ID_VIEW_ZOOMIN},
@@ -169,9 +181,12 @@ void OnInitMenu(HMENU m) {
             EnableMenuItem(m, id, en);
     } else if (m == g_viewMenu) {
         CheckMenuItem(m, ID_VIEW_SIDEBAR, g_settings.showSidebar ? MF_CHECKED : MF_UNCHECKED);
-        CheckMenuItem(m, ID_VIEW_OUTPUT, g_settings.showOutput ? MF_CHECKED : MF_UNCHECKED);
+        bool out = g_settings.showOutput && M.panelTab == MainState::PanelOutput;
+        CheckMenuItem(m, ID_VIEW_OUTPUT, out ? MF_CHECKED : MF_UNCHECKED);
         CheckMenuItem(m, ID_VIEW_WRAP, g_settings.wrap ? MF_CHECKED : MF_UNCHECKED);
         CheckMenuItem(m, ID_VIEW_DARK, g_settings.dark ? MF_CHECKED : MF_UNCHECKED);
+    } else if (m == g_termMenu) {
+        EnableMenuItem(m, ID_TERM_KILL, Term::GroupCount() ? MF_ENABLED : MF_GRAYED);
     } else if (m == g_gitMenu) {
         bool repo = M.status.isRepo;
         int repoCmds[] = {ID_GIT_COMMIT, ID_GIT_COMMIT_STAGED, ID_GIT_COMMIT_ALL, ID_GIT_COMMIT_AMEND, ID_GIT_UNDO_COMMIT,
@@ -229,6 +244,7 @@ static void SetZoom(int size) {
         if (t.kind == Tab::Editor) t.ed->FontChanged();
         else InvalidateRect(t.hwnd, nullptr, FALSE);
     }
+    Term::FontChanged();
     SaveSettings();
 }
 
@@ -353,10 +369,26 @@ void OnCommand(int id) {
         SaveSettings();
         break;
     case ID_VIEW_OUTPUT:
-        g_settings.showOutput = !g_settings.showOutput;
-        Layout();
-        SaveSettings();
+        if (g_settings.showOutput && M.panelTab == MainState::PanelOutput) HidePanel();
+        else ShowPanel(MainState::PanelOutput);
         break;
+    case ID_VIEW_TERMINAL:
+        if (g_settings.showOutput && M.panelTab == MainState::PanelTerminal && Term::HasFocus()) {
+            HidePanel();
+        } else {
+            ShowPanel(MainState::PanelTerminal);
+            if (!Term::Focus()) Term::New();
+        }
+        break;
+    case ID_TERM_NEW:
+        ShowPanel(MainState::PanelTerminal);
+        Term::New();
+        break;
+    case ID_TERM_SPLIT:
+        ShowPanel(MainState::PanelTerminal);
+        Term::Split();
+        break;
+    case ID_TERM_KILL: Term::KillActive(); break;
     case ID_VIEW_WRAP:
         g_settings.wrap = !g_settings.wrap;
         for (auto& t : M.tabs)

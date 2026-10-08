@@ -29,12 +29,17 @@ struct MainState {
 
     // geometry (client coordinates)
     RECT rcSideHeader{}, rcSideBody{}, rcSplitter{}, rcTabs{}, rcContent{}, rcOutputHeader{}, rcOutput{}, rcStatus{};
+    RECT rcPanelSplit{};  // drag handle on the top edge of the bottom panel
+    enum PanelTab { PanelOutput, PanelTerminal } panelTab = PanelOutput;
+    struct PanelItem { RECT rc; enum Kind { OutputTab, TerminalTab, Group, NewTerm, SplitTerm, KillTerm, ClosePanel } kind; int group; };
+    std::vector<PanelItem> panelItems;
+    HWND lastFocus = nullptr;  // restored when the window is re-activated
     std::vector<RECT> tabRects;  // parallel to tabs (empty rect = not visible)
     RECT rcTabOverflow{};
     int tabFirst = 0;
     int hoverTab = -1;
     bool hoverClose = false;
-    bool draggingSplit = false;
+    bool draggingSplit = false, draggingPanel = false;
     bool tracking = false;
     struct StatusItem { RECT rc; int cmd; };
     std::vector<StatusItem> statusItems;
@@ -52,6 +57,29 @@ bool CloseTab(int i);  // false if cancelled
 EditorView* ActiveEditor();
 void RecreateFonts();
 void ApplyThemeAll();
+
+void TerminalsChanged();  // terminal.cpp -> main: groups/panes changed, re-layout
+void ShowPanel(MainState::PanelTab tab);
+void HidePanel();
+
+// terminal.cpp
+namespace Term {
+int GroupCount();
+int ActiveGroup();
+std::wstring GroupTitle(int i);
+void SelectGroup(int i);
+void New();         // new terminal in its own group
+void Split();       // new terminal beside the active one
+void KillActive();  // kill the active pane
+void KillGroup(int i);
+void Layout(const RECT& rc, bool visible);  // place the active group's panes (main-window client coordinates)
+bool Focus();       // focus the active pane; false if there is none
+bool HasFocus();
+bool WantsKey(const MSG& msg);  // keystroke should go to a focused terminal instead of the accelerators
+void FontChanged();
+void ThemeChanged();
+void CloseAll();
+}
 
 // main_commands.cpp
 void OnCommand(int id);

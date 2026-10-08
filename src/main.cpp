@@ -41,7 +41,7 @@ int WINAPI wWinMain(HINSTANCE hinst, HINSTANCE, PWSTR, int show) {
 
     MSG msg;
     while (GetMessageW(&msg, nullptr, 0, 0) > 0) {
-        if (!TranslateAcceleratorW(wnd, M.accel, &msg)) {
+        if (Term::WantsKey(msg) || !TranslateAcceleratorW(wnd, M.accel, &msg)) {
             TranslateMessage(&msg);
             DispatchMessageW(&msg);
         }

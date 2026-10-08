@@ -1,4 +1,4 @@
-// Main frame: sidebar, tab strip, content area, output panel and status bar.
+// Main frame: sidebar, tab strip, content area, bottom panel (output / terminal) and status bar.
 #include "main_window.h"
 #include "resource.h"
 #include <dwmapi.h>
@@ -69,6 +69,7 @@ void ApplyThemeAll() {
     Explorer::ThemeChanged();
     Scm::ThemeChanged();
     FindBar::ThemeChanged();
+    Term::ThemeChanged();
     for (auto& t : M.tabs) {
         SetWindowTheme(t.hwnd, g_settings.dark ? L"DarkMode_Explorer" : L"Explorer", nullptr);
         if (t.kind == Tab::Log) LogView::ThemeChanged(t.hwnd);
@@ -150,15 +151,23 @@ void Layout() {
         MoveWindow(M.findBar, x0, y, rc.right - x0, fh, TRUE);
         y += fh;
     }
-    int outH = g_settings.showOutput ? std::min(S(180), (bottom - y) / 2) : 0;
+    int outH = 0;
+    if (g_settings.showOutput) {
+        int avail = bottom - y;
+        outH = std::min(avail, std::max(S(60), std::min(S(g_settings.panelHeight), avail - S(80))));
+    }
     if (outH) {
-        M.rcOutputHeader = RECT{x0, bottom - outH, rc.right, bottom - outH + S(24)};
+        M.rcOutputHeader = RECT{x0, bottom - outH, rc.right, bottom - outH + S(28)};
         M.rcOutput = RECT{x0, M.rcOutputHeader.bottom, rc.right, bottom};
-        MoveWindow(M.output, x0 + S(8), M.rcOutput.top, rc.right - x0 - S(8), bottom - M.rcOutput.top, TRUE);
-        ShowWindow(M.output, SW_SHOW);
+        M.rcPanelSplit = RECT{x0, M.rcOutputHeader.top, rc.right, M.rcOutputHeader.top + S(4)};
+        bool term = M.panelTab == MainState::PanelTerminal;
+        if (!term) MoveWindow(M.output, x0 + S(8), M.rcOutput.top, rc.right - x0 - S(8), bottom - M.rcOutput.top, TRUE);
+        ShowWindow(M.output, term ? SW_HIDE : SW_SHOW);
+        Term::Layout(M.rcOutput, term);
     } else {
-        M.rcOutputHeader = M.rcOutput = RECT{};
+        M.rcOutputHeader = M.rcOutput = M.rcPanelSplit = RECT{};
         ShowWindow(M.output, SW_HIDE);
+        Term::Layout(RECT{}, false);
     }
     M.rcContent = RECT{x0, y, rc.right, bottom - outH};
     if (M.active >= 0) {
@@ -388,7 +397,7 @@ static void PaintWelcome(HDC dc) {
     const wchar_t* lines[] = {
         L"Ctrl+N\tNew file",           L"Ctrl+O\tOpen file",          L"Ctrl+Shift+O\tOpen folder",
         L"Ctrl+Shift+E\tExplorer",     L"Ctrl+Shift+G\tSource control", L"Ctrl+F / Ctrl+H\tFind / replace",
-        L"Ctrl+G\tGo to line",         L"Alt+Z\tToggle word wrap",
+        L"Ctrl+G\tGo to line",         L"Alt+Z\tToggle word wrap",     L"Ctrl+`\tToggle terminal",
     };
     for (auto l : lines) {
         std::wstring s = l;
@@ -412,6 +421,59 @@ static void PaintWelcome(HDC dc) {
     }
 }
 
+// Bottom panel header: OUTPUT / TERMINAL tabs, terminal groups, and the terminal actions on the right.
+static void PaintPanelHeader(HDC dc) {
+    typedef MainState::PanelItem PI;
+    const Theme& t = g_theme;
+    M.panelItems.clear();
+    RECT h = M.rcOutputHeader;
+    if (h.bottom <= h.top) return;
+    RECT o = {h.left, h.top, M.rcOutput.right, M.rcOutput.bottom};
+    FillC(dc, o, t.bg);
+    RECT l = {o.left, o.top, o.right, o.top + 1};
+    FillC(dc, l, t.border);
+    bool term = M.panelTab == MainState::PanelTerminal;
+    int x = h.left + S(8);
+    auto label = [&](const wchar_t* s, bool active, PI::Kind kind) {
+        SelectObject(dc, g_uiFont);
+        SIZE sz;
+        GetTextExtentPoint32W(dc, s, (int)wcslen(s), &sz);
+        RECT r = {x, h.top, x + sz.cx + S(16), h.bottom};
+        Text(dc, s, r, active ? t.panelFg : t.panelFgDim, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+        if (active) { RECT u = {r.left + S(6), r.bottom - S(3), r.right - S(6), r.bottom - S(1)}; FillC(dc, u, t.accent); }
+        M.panelItems.push_back({r, kind, -1});
+        x = r.right;
+    };
+    label(L"OUTPUT", !term, PI::OutputTab);
+    label(L"TERMINAL", term, PI::TerminalTab);
+    int rx = h.right - S(4);
+    auto icon = [&](const wchar_t* glyph, PI::Kind kind) {
+        RECT r = {rx - S(28), h.top, rx, h.bottom};
+        Text(dc, glyph, r, t.panelFg, DT_CENTER | DT_VCENTER | DT_SINGLELINE, g_iconFont);
+        M.panelItems.push_back({r, kind, -1});
+        rx = r.left;
+    };
+    icon(kIcoClose, PI::ClosePanel);
+    if (!term) return;
+    icon(L"\xE74D", PI::KillTerm);   // Delete
+    icon(L"\xE89A", PI::SplitTerm);  // TwoPage
+    icon(L"\xE710", PI::NewTerm);    // Add
+    x += S(16);
+    for (int i = 0; i < Term::GroupCount() && x < rx - S(48); ++i) {
+        std::wstring s = Term::GroupTitle(i);
+        SelectObject(dc, g_uiFont);
+        SIZE sz;
+        GetTextExtentPoint32W(dc, s.c_str(), (int)s.size(), &sz);
+        RECT r = {x, h.top + S(4), x + std::min((int)sz.cx + S(16), rx - S(8) - x), h.bottom - S(4)};
+        bool active = i == Term::ActiveGroup();
+        if (active) FillC(dc, r, t.activeBg);
+        RECT tr = {r.left + S(8), r.top, r.right - S(8), r.bottom};
+        Text(dc, s, tr, active ? t.panelFg : t.panelFgDim, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+        M.panelItems.push_back({r, PI::Group, i});
+        x = r.right + S(4);
+    }
+}
+
 static void Paint(HDC hdc, const RECT& clip) {
     RECT rc;
     GetClientRect(M.hwnd, &rc);
@@ -428,16 +490,7 @@ static void Paint(HDC hdc, const RECT& clip) {
     }
     PaintTabs(dc);
     if (M.tabs.empty()) PaintWelcome(dc);
-    if (M.rcOutputHeader.bottom > M.rcOutputHeader.top) {
-        RECT o = {M.rcOutputHeader.left, M.rcOutputHeader.top, M.rcOutput.right, M.rcOutput.bottom};
-        FillC(dc, o, g_theme.bg);
-        RECT l = {o.left, o.top, o.right, o.top + 1};
-        FillC(dc, l, g_theme.border);
-        RECT tr = {M.rcOutputHeader.left + S(12), M.rcOutputHeader.top, M.rcOutputHeader.right - S(40), M.rcOutputHeader.bottom};
-        Text(dc, L"OUTPUT (git)", tr, g_theme.panelFg, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
-        RECT cr = {M.rcOutputHeader.right - S(30), M.rcOutputHeader.top, M.rcOutputHeader.right - S(6), M.rcOutputHeader.bottom};
-        Text(dc, kIcoClose, cr, g_theme.panelFg, DT_CENTER | DT_VCENTER | DT_SINGLELINE, g_iconFont);
-    }
+    PaintPanelHeader(dc);
     PaintStatus(dc);
     BitBlt(hdc, clip.left, clip.top, clip.right - clip.left, clip.bottom - clip.top, dc, clip.left, clip.top, SRCCOPY);
     SelectObject(dc, of);
@@ -586,6 +639,14 @@ static LRESULT CALLBACK MainProc(HWND h, UINT m, WPARAM w, LPARAM l) {
     case WM_INITMENUPOPUP:
         OnInitMenu((HMENU)w);
         return 0;
+    case WM_ACTIVATE:
+        if (LOWORD(w) == WA_INACTIVE) {
+            M.lastFocus = GetFocus();
+        } else if (M.lastFocus && IsChild(h, M.lastFocus) && IsWindowVisible(M.lastFocus)) {
+            SetFocus(M.lastFocus);
+            return 0;
+        }
+        break;
     case WM_SETFOCUS:
         if (M.active >= 0) SetFocus(M.tabs[(size_t)M.active].hwnd);
         return 0;
@@ -626,6 +687,7 @@ static LRESULT CALLBACK MainProc(HWND h, UINT m, WPARAM w, LPARAM l) {
             RECT sp = M.rcSplitter;
             InflateRect(&sp, S(2), 0);
             if (PtInRect(&sp, pt) || M.draggingSplit) { SetCursor(LoadCursor(nullptr, IDC_SIZEWE)); return TRUE; }
+            if (PtInRect(&M.rcPanelSplit, pt) || M.draggingPanel) { SetCursor(LoadCursor(nullptr, IDC_SIZENS)); return TRUE; }
             bool link = false;
             for (auto& it : M.statusItems) if (PtInRect(&it.rc, pt)) link = true;
             if (M.tabs.empty()) for (auto& wl : M.welcomeLinks) if (PtInRect(&wl.first, pt)) link = true;
@@ -639,6 +701,23 @@ static LRESULT CALLBACK MainProc(HWND h, UINT m, WPARAM w, LPARAM l) {
         RECT sp = M.rcSplitter;
         InflateRect(&sp, S(2), 0);
         if (PtInRect(&sp, pt)) { M.draggingSplit = true; SetCapture(h); return 0; }
+        if (PtInRect(&M.rcPanelSplit, pt)) { M.draggingPanel = true; SetCapture(h); return 0; }
+        for (auto it : M.panelItems) {
+            if (!PtInRect(&it.rc, pt)) continue;
+            switch (it.kind) {
+            case MainState::PanelItem::OutputTab: ShowPanel(MainState::PanelOutput); break;
+            case MainState::PanelItem::TerminalTab:
+                ShowPanel(MainState::PanelTerminal);
+                if (!Term::Focus()) Term::New();
+                break;
+            case MainState::PanelItem::Group: Term::SelectGroup(it.group); break;
+            case MainState::PanelItem::NewTerm: OnCommand(ID_TERM_NEW); break;
+            case MainState::PanelItem::SplitTerm: OnCommand(ID_TERM_SPLIT); break;
+            case MainState::PanelItem::KillTerm: OnCommand(ID_TERM_KILL); break;
+            case MainState::PanelItem::ClosePanel: HidePanel(); break;
+            }
+            return 0;
+        }
         if (PtInRect(&M.rcSideHeader, pt)) {
             int mode = pt.x < (M.rcSideHeader.left + M.rcSideHeader.right) / 2 ? 0 : 1;
             OnCommand(mode == 0 ? ID_VIEW_EXPLORER : ID_VIEW_SCM);
@@ -652,7 +731,6 @@ static LRESULT CALLBACK MainProc(HWND h, UINT m, WPARAM w, LPARAM l) {
             else ActivateTab(ti);
             return 0;
         }
-        if (PtInRect(&M.rcOutputHeader, pt) && pt.x > M.rcOutputHeader.right - S(34)) { OnCommand(ID_VIEW_OUTPUT); return 0; }
         for (auto& it : M.statusItems)
             if (PtInRect(&it.rc, pt)) { OnCommand(it.cmd); return 0; }
         if (M.tabs.empty())
@@ -669,6 +747,11 @@ static LRESULT CALLBACK MainProc(HWND h, UINT m, WPARAM w, LPARAM l) {
         POINT pt = {GET_X_LPARAM(l), GET_Y_LPARAM(l)};
         if (M.draggingSplit) {
             g_settings.sidebarWidth = std::max(120, std::min(1200, MulDiv(pt.x, 96, g_dpi)));
+            Layout();
+            return 0;
+        }
+        if (M.draggingPanel) {
+            g_settings.panelHeight = std::max(60, std::min(2000, MulDiv(M.rcStatus.top - pt.y, 96, g_dpi)));
             Layout();
             return 0;
         }
@@ -691,8 +774,8 @@ static LRESULT CALLBACK MainProc(HWND h, UINT m, WPARAM w, LPARAM l) {
         if (M.hoverTab != -1) { M.hoverTab = -1; InvalidateRect(h, &M.rcTabs, FALSE); }
         return 0;
     case WM_LBUTTONUP:
-        if (M.draggingSplit) {
-            M.draggingSplit = false;
+        if (M.draggingSplit || M.draggingPanel) {
+            M.draggingSplit = M.draggingPanel = false;
             ReleaseCapture();
             SaveSettings();
         }
@@ -701,6 +784,8 @@ static LRESULT CALLBACK MainProc(HWND h, UINT m, WPARAM w, LPARAM l) {
         POINT pt = {GET_X_LPARAM(l), GET_Y_LPARAM(l)};
         int ti = TabAt(pt, nullptr);
         if (ti >= 0) CloseTab(ti);
+        for (auto it : M.panelItems)
+            if (it.kind == MainState::PanelItem::Group && PtInRect(&it.rc, pt)) { Term::KillGroup(it.group); break; }
         return 0;
     }
     case WM_RBUTTONUP: {
@@ -731,6 +816,7 @@ static LRESULT CALLBACK MainProc(HWND h, UINT m, WPARAM w, LPARAM l) {
             if (t.kind == Tab::Editor) t.ed->FontChanged();
         Explorer::ThemeChanged();
         Layout();
+        Term::FontChanged();
         RedrawWindow(h, nullptr, nullptr, RDW_INVALIDATE | RDW_ALLCHILDREN);
         return 0;
     }
@@ -744,6 +830,7 @@ static LRESULT CALLBACK MainProc(HWND h, UINT m, WPARAM w, LPARAM l) {
         g_settings.winW = wp.rcNormalPosition.right - wp.rcNormalPosition.left;
         g_settings.winH = wp.rcNormalPosition.bottom - wp.rcNormalPosition.top;
         SaveSettings();
+        Term::CloseAll();
         DestroyWindow(h);
         return 0;
     }
@@ -752,6 +839,33 @@ static LRESULT CALLBACK MainProc(HWND h, UINT m, WPARAM w, LPARAM l) {
         return 0;
     }
     return DefWindowProcW(h, m, w, l);
+}
+
+// ---------------- bottom panel ----------------
+
+void ShowPanel(MainState::PanelTab tab) {
+    M.panelTab = tab;
+    if (!g_settings.showOutput) {
+        g_settings.showOutput = true;
+        SaveSettings();
+    }
+    Layout();
+}
+
+void HidePanel() {
+    bool hadFocus = Term::HasFocus() || GetFocus() == M.output;
+    g_settings.showOutput = false;
+    Layout();
+    SaveSettings();
+    if (hadFocus) SetFocus(M.hwnd);
+}
+
+void TerminalsChanged() {
+    if (Term::GroupCount() == 0 && M.panelTab == MainState::PanelTerminal && g_settings.showOutput) {
+        g_settings.showOutput = false;
+        SaveSettings();
+    }
+    Layout();
 }
 
 // ---------------- App API ----------------
@@ -897,10 +1011,7 @@ void AppendOutput(const std::wstring& s) {
 }
 
 void ShowOutput() {
-    if (!g_settings.showOutput) {
-        g_settings.showOutput = true;
-        Layout();
-    }
+    if (!g_settings.showOutput) ShowPanel(MainState::PanelOutput);  // don't take the panel away from a visible terminal
 }
 
 void ReloadUnmodifiedDocs() {
