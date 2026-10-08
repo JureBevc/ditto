@@ -314,6 +314,7 @@ void Paint(HDC hdc) {
 }
 
 LRESULT CALLBACK EditSub(HWND h, UINT m, WPARAM w, LPARAM l, UINT_PTR, DWORD_PTR) {
+    if (m == WM_KEYDOWN && w == 'A' && GetKeyState(VK_CONTROL) < 0) { SendMessageW(h, EM_SETSEL, 0, -1); return 0; }
     if (m == WM_KEYDOWN) {
         int n = (int)g_items.size();
         switch (w) {
@@ -330,7 +331,6 @@ LRESULT CALLBACK EditSub(HWND h, UINT m, WPARAM w, LPARAM l, UINT_PTR, DWORD_PTR
         return 0;
     }
     if (m == WM_CHAR && (w == VK_RETURN || w == VK_ESCAPE || w == 1)) return 0;
-    if (m == WM_KEYDOWN && w == 'A' && GetKeyState(VK_CONTROL) < 0) { SendMessageW(h, EM_SETSEL, 0, -1); return 0; }
     return DefSubclassProc(h, m, w, l);
 }
 

@@ -16,9 +16,9 @@ BEGIN
         BLOCK "040904b0"
         BEGIN
             VALUE "FileDescription", "ditto - lightweight text editor and git client"
-            VALUE "FileVersion", "1.2.0"
+            VALUE "FileVersion", "1.3.0"
             VALUE "ProductName", "ditto"
-            VALUE "ProductVersion", "1.2.0"
+            VALUE "ProductVersion", "1.3.0"
             VALUE "OriginalFilename", "ditto.exe"
         END
     END
