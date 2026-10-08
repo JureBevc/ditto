@@ -100,6 +100,8 @@ std::wstring FormatError(DWORD err);
 int MsgBox(HWND owner, const std::wstring& text, UINT flags = MB_OK | MB_ICONINFORMATION);
 void RunOnUi(std::function<void()> fn);
 bool SetClipboardText(HWND owner, const std::wstring& text);
+// Opens Explorer with `path` selected.
+void RevealInExplorer(const std::wstring& path);
 bool GetClipboardText(HWND owner, std::wstring& text);
 std::string Base64(const std::string& in);
 

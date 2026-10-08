@@ -20,6 +20,7 @@ HMENU BuildMenu() {
     AppendMenuW(f, MF_SEPARATOR, 0, nullptr);
     AppendMenuW(f, MF_STRING, ID_FILE_CLOSETAB, L"&Close Tab\tCtrl+W");
     AppendMenuW(f, MF_STRING, ID_FILE_CLOSEFOLDER, L"Close Fol&der");
+    AppendMenuW(f, MF_STRING, ID_FILE_REVEAL, L"Reveal in File Expl&orer\tAlt+Shift+R");
     AppendMenuW(f, MF_SEPARATOR, 0, nullptr);
     AppendMenuW(f, MF_STRING, ID_FILE_EXIT, L"E&xit\tAlt+F4");
     AppendMenuW(bar, MF_POPUP, (UINT_PTR)f, L"&File");
@@ -115,6 +116,7 @@ HACCEL BuildAccel() {
         {FCONTROL | FSHIFT | FVIRTKEY, 'O', ID_FILE_OPENFOLDER},
         {FCONTROL | FVIRTKEY, 'S', ID_FILE_SAVE},
         {FCONTROL | FSHIFT | FVIRTKEY, 'S', ID_FILE_SAVEAS},
+        {FALT | FSHIFT | FVIRTKEY, 'R', ID_FILE_REVEAL},
         {FCONTROL | FVIRTKEY, 'W', ID_FILE_CLOSETAB},
         {FCONTROL | FVIRTKEY, VK_F4, ID_FILE_CLOSETAB},
         {FCONTROL | FVIRTKEY, 'F', ID_FIND_SHOW},
@@ -151,6 +153,8 @@ void OnInitMenu(HMENU m) {
         for (size_t i = 0; i < r.size(); ++i) AppendMenuW(g_recentMenu, MF_STRING, ID_FILE_RECENT0 + i, r[i].c_str());
         if (r.empty()) AppendMenuW(g_recentMenu, MF_STRING | MF_GRAYED, 0, L"(none)");
         EnableMenuItem(m, ID_FILE_CLOSEFOLDER, M.folder.empty() ? MF_GRAYED : MF_ENABLED);
+        EditorView* rv = ActiveEditor();
+        EnableMenuItem(m, ID_FILE_REVEAL, (rv && !rv->buf->path.empty()) ? MF_ENABLED : MF_GRAYED);
         bool ed = ActiveEditor() != nullptr;
         EnableMenuItem(m, ID_FILE_SAVE, ed ? MF_ENABLED : MF_GRAYED);
         EnableMenuItem(m, ID_FILE_SAVEAS, ed ? MF_ENABLED : MF_GRAYED);
@@ -300,6 +304,7 @@ void OnCommand(int id) {
         InvalidateRect(M.hwnd, nullptr, FALSE);
         break;
     case ID_FILE_EXIT: PostMessageW(M.hwnd, WM_CLOSE, 0, 0); break;
+    case ID_FILE_REVEAL: if (ed) RevealInExplorer(ed->buf->path); break;
 
     case ID_EDIT_UNDO: if (ed) ed->Undo(); break;
     case ID_EDIT_REDO: if (ed) ed->Redo(); break;

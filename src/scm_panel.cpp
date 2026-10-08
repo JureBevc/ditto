@@ -237,7 +237,7 @@ void ListContextMenu(int x, int y) {
     if (anyChange) AppendMenuW(m, MF_STRING, 3, L"Discard Changes");
     AppendMenuW(m, MF_SEPARATOR, 0, nullptr);
     AppendMenuW(m, MF_STRING, 11, L"Copy Path");
-    AppendMenuW(m, MF_STRING, 12, L"Reveal in File Explorer");
+    AppendMenuW(m, MF_STRING, 12, L"Reveal in File Explorer\tAlt+Shift+R");
     int cmd = TrackPopupMenu(m, TPM_RETURNCMD | TPM_RIGHTBUTTON, x, y, 0, P.list, nullptr);
     DestroyMenu(m);
     if (cmd == 10) { for (int i : rows) OpenRow(i, false); }
@@ -245,7 +245,7 @@ void ListContextMenu(int x, int y) {
         const GitFile& f = P.st.files[(size_t)P.rows[(size_t)rows[0]].file];
         std::wstring full = JoinPath(P.st.root, ToBackslashes(f.path));
         if (cmd == 11) SetClipboardText(P.list, full);
-        else ShellExecuteW(nullptr, L"open", L"explorer.exe", (L"/select,\"" + full + L"\"").c_str(), nullptr, SW_SHOWNORMAL);
+        else RevealInExplorer(full);
     } else if (cmd >= 1 && cmd <= 4) {
         std::vector<int> filtered;
         for (int i : rows) {

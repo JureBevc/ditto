@@ -286,6 +286,11 @@ bool GetClipboardText(HWND owner, std::wstring& text) {
     return ok;
 }
 
+void RevealInExplorer(const std::wstring& path) {
+    if (path.empty()) return;
+    ShellExecuteW(nullptr, L"open", L"explorer.exe", (L"/select,\"" + path + L"\"").c_str(), nullptr, SW_SHOWNORMAL);
+}
+
 std::string Base64(const std::string& in) {
     static const char* tbl = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
     std::string out;

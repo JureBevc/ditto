@@ -470,7 +470,7 @@ static void TabMenu(int i, POINT screen) {
     if (hasPath) {
         AppendMenuW(m, MF_SEPARATOR, 0, nullptr);
         AppendMenuW(m, MF_STRING, 4, L"Copy Path");
-        AppendMenuW(m, MF_STRING, 5, L"Reveal in File Explorer");
+        AppendMenuW(m, MF_STRING, 5, L"Reveal in File Explorer\tAlt+Shift+R");
     }
     int cmd = TrackPopupMenu(m, TPM_RETURNCMD | TPM_RIGHTBUTTON, screen.x, screen.y, 0, M.hwnd, nullptr);
     DestroyMenu(m);
@@ -483,7 +483,7 @@ static void TabMenu(int i, POINT screen) {
             if (!CloseTab(k)) break;
         }
     } else if (cmd == 4) SetClipboardText(M.hwnd, path);
-    else if (cmd == 5) ShellExecuteW(nullptr, L"open", L"explorer.exe", (L"/select,\"" + path + L"\"").c_str(), nullptr, SW_SHOWNORMAL);
+    else if (cmd == 5) RevealInExplorer(path);
 }
 
 static void OverflowMenu() {

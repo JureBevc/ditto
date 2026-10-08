@@ -139,7 +139,7 @@ void ContextMenu(HTREEITEM it, POINT pt) {
     AppendMenuW(m, MF_SEPARATOR, 0, nullptr);
     if (n) {
         AppendMenuW(m, MF_STRING, 6, L"Copy Path");
-        AppendMenuW(m, MF_STRING, 7, L"Reveal in File Explorer");
+        AppendMenuW(m, MF_STRING, 7, L"Reveal in File Explorer\tAlt+Shift+R");
     }
     AppendMenuW(m, MF_STRING, 8, L"Refresh");
     int cmd = TrackPopupMenu(m, TPM_RETURNCMD | TPM_RIGHTBUTTON, pt.x, pt.y, 0, GetParent(g_tree), nullptr);
@@ -186,9 +186,7 @@ void ContextMenu(HTREEITEM it, POINT pt) {
         break;
     }
     case 6: SetClipboardText(owner, n->path); break;
-    case 7:
-        ShellExecuteW(nullptr, L"open", L"explorer.exe", (L"/select,\"" + n->path + L"\"").c_str(), nullptr, SW_SHOWNORMAL);
-        break;
+    case 7: RevealInExplorer(n->path); break;
     case 8: Explorer::Refresh(); break;
     }
 }

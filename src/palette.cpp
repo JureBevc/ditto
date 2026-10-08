@@ -20,6 +20,7 @@ const Cmd kCommands[] = {
     {L"File: Save All", ID_FILE_SAVEALL, L""},
     {L"File: Close Editor", ID_FILE_CLOSETAB, L"Ctrl+W"},
     {L"File: Close Folder", ID_FILE_CLOSEFOLDER, L""},
+    {L"File: Reveal in File Explorer", ID_FILE_REVEAL, L"Alt+Shift+R"},
     {L"File: Exit", ID_FILE_EXIT, L"Alt+F4"},
     {L"Edit: Undo", ID_EDIT_UNDO, L"Ctrl+Z"},
     {L"Edit: Redo", ID_EDIT_REDO, L"Ctrl+Y"},
