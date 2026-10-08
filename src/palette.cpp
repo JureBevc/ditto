@@ -1,5 +1,6 @@
 // Command palette / quick open (F1, Ctrl+Shift+P, Ctrl+P), modelled on VS Code:
 //   ">query"  run a command      "query"  open a file from the folder      ":N"  go to line N
+// Ctrl+R shows the same popup as a recent-folder picker.
 #include "main_window.h"
 #include "resource.h"
 
@@ -15,6 +16,7 @@ const Cmd kCommands[] = {
     {L"File: New File", ID_FILE_NEW, L"Ctrl+N"},
     {L"File: Open File...", ID_FILE_OPEN, L"Ctrl+O"},
     {L"File: Open Folder...", ID_FILE_OPENFOLDER, L"Ctrl+Shift+O"},
+    {L"File: Open Recent Folder...", ID_FILE_OPENRECENT, L"Ctrl+R"},
     {L"File: Save", ID_FILE_SAVE, L"Ctrl+S"},
     {L"File: Save As...", ID_FILE_SAVEAS, L"Ctrl+Shift+S"},
     {L"File: Save All", ID_FILE_SAVEALL, L""},
@@ -92,6 +94,7 @@ std::vector<Item> g_items;
 int g_sel = 0, g_top = 0;
 HBRUSH g_inputBrush;
 bool g_hiding = false;
+bool g_recentMode = false;  // listing recent folders instead of files/commands
 
 // file index for quick open (filled by a background thread)
 std::vector<std::wstring> g_files;  // paths relative to g_filesRoot
@@ -393,6 +396,8 @@ namespace Palette {
 
 void Show(const std::wstring& prefix) {
     if (!g_pop) Create();
+    g_recentMode = false;
+    SendMessageW(g_edit, EM_SETCUEBANNER, TRUE, (LPARAM)L"");
     if (g_inputBrush) DeleteObject(g_inputBrush);
     g_inputBrush = CreateSolidBrush(g_theme.inputBg);
     LOGFONTW lf;
@@ -410,6 +415,13 @@ void Show(const std::wstring& prefix) {
     SetFocus(g_edit);
 }
 
+void ShowRecent() {
+    Show(L"");
+    g_recentMode = true;
+    SendMessageW(g_edit, EM_SETCUEBANNER, TRUE, (LPARAM)L"Select a recent folder to open");
+    Refresh();
+}
+
 void Hide(bool restoreFocus) {
     if (!g_pop || !IsWindowVisible(g_pop)) return;
     g_hiding = true;
@@ -424,7 +436,29 @@ void Hide(bool restoreFocus) {
 void Refresh() {
     std::wstring raw = Query();
     g_items.clear();
-    if (!raw.empty() && raw[0] == L'>') {
+    if (g_recentMode) {
+        std::wstring q = Squash(raw);
+        auto& r = g_settings.recentFolders;
+        for (size_t i = 0; i < r.size(); ++i) {
+            Item it;
+            it.kind = K_CMD;
+            it.label = FileNameOf(r[i]);
+            it.detail = r[i];
+            it.cmd = ID_FILE_RECENT0 + (int)i;
+            if (PathEqualsI(r[i], M.folder)) it.key = L"current";
+            it.score = Fuzzy(LowerW(it.label), q, &it.hlLabel);  // prefer matches in the folder name
+            if (it.score >= 0) it.score += 20;
+            else it.score = Fuzzy(LowerW(it.detail), q, &it.hlDetail);
+            if (it.score >= 0) g_items.push_back(it);
+        }
+        if (!q.empty())
+            std::stable_sort(g_items.begin(), g_items.end(), [](const Item& a, const Item& b) { return a.score > b.score; });
+        Item open{K_INFO, L"Open Folder..."};
+        open.key = L"Ctrl+Shift+O";
+        open.cmd = ID_FILE_OPENFOLDER;
+        if (g_items.empty()) g_items.push_back(Item{K_INFO, r.empty() ? L"No recent folders" : L"No matching folders"});
+        g_items.push_back(open);
+    } else if (!raw.empty() && raw[0] == L'>') {
         std::wstring q = Squash(raw.substr(1));
         for (auto& c : kCommands) {
             Item it;

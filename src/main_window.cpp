@@ -396,6 +396,7 @@ static void PaintWelcome(HDC dc) {
     y += S(56);
     const wchar_t* lines[] = {
         L"Ctrl+N\tNew file",           L"Ctrl+O\tOpen file",          L"Ctrl+Shift+O\tOpen folder",
+        L"Ctrl+R\tOpen recent folder",
         L"Ctrl+Shift+E\tExplorer",     L"Ctrl+Shift+G\tSource control", L"Ctrl+F / Ctrl+H\tFind / replace",
         L"Ctrl+G\tGo to line",         L"Alt+Z\tToggle word wrap",     L"Ctrl+`\tToggle terminal",
     };

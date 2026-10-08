@@ -105,6 +105,7 @@ void FocusFind();
 // palette.cpp
 namespace Palette {
 void Show(const std::wstring& prefix);  // ">" commands, "" files, ":" go to line
+void ShowRecent();                      // pick a recent folder to open
 void Hide(bool restoreFocus = true);
 void Refresh();
 }

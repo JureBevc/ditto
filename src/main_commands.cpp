@@ -13,6 +13,7 @@ HMENU BuildMenu() {
     AppendMenuW(f, MF_STRING, ID_FILE_OPENFOLDER, L"Open &Folder...\tCtrl+Shift+O");
     g_recentMenu = CreatePopupMenu();
     AppendMenuW(f, MF_POPUP, (UINT_PTR)g_recentMenu, L"Open &Recent");
+    AppendMenuW(f, MF_STRING, ID_FILE_OPENRECENT, L"Open Recent Folder...\tCtrl+R");
     AppendMenuW(f, MF_SEPARATOR, 0, nullptr);
     AppendMenuW(f, MF_STRING, ID_FILE_SAVE, L"&Save\tCtrl+S");
     AppendMenuW(f, MF_STRING, ID_FILE_SAVEAS, L"Save &As...\tCtrl+Shift+S");
@@ -123,6 +124,7 @@ HACCEL BuildAccel() {
         {FCONTROL | FVIRTKEY, 'N', ID_FILE_NEW},
         {FCONTROL | FVIRTKEY, 'O', ID_FILE_OPEN},
         {FCONTROL | FSHIFT | FVIRTKEY, 'O', ID_FILE_OPENFOLDER},
+        {FCONTROL | FVIRTKEY, 'R', ID_FILE_OPENRECENT},
         {FCONTROL | FVIRTKEY, 'S', ID_FILE_SAVE},
         {FCONTROL | FSHIFT | FVIRTKEY, 'S', ID_FILE_SAVEAS},
         {FALT | FSHIFT | FVIRTKEY, 'R', ID_FILE_REVEAL},
@@ -334,6 +336,7 @@ void OnCommand(int id) {
         break;
     case ID_PALETTE_COMMANDS: Palette::Show(L">"); break;
     case ID_PALETTE_FILES: Palette::Show(L""); break;
+    case ID_FILE_OPENRECENT: Palette::ShowRecent(); break;
     case ID_FIND_SHOW:
     case ID_FIND_REPLACE:
         if (ed) FindBar::Show(id == ID_FIND_REPLACE);
