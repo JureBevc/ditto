@@ -12,7 +12,7 @@ struct Tab {
 
 struct MainState {
     HWND hwnd = nullptr;
-    HWND explorer = nullptr, scm = nullptr, findBar = nullptr, output = nullptr;
+    HWND explorer = nullptr, scm = nullptr, search = nullptr, findBar = nullptr, output = nullptr;
     HMENU menu = nullptr;
     HACCEL accel = nullptr;
     HFONT symFont = nullptr;
@@ -25,7 +25,9 @@ struct MainState {
     GitStatus status;
     bool gitPending = false, gitQueued = false;
     std::wstring statusText;
-    int sidebarMode = 0;  // 0 explorer, 1 source control
+    int sidebarMode = 0;  // 0 explorer, 1 source control, 2 search
+    struct SideTab { RECT rc; int mode; };
+    SideTab sideTabs[3] = {};  // sidebar header labels (set when painted)
 
     // geometry (client coordinates)
     RECT rcSideHeader{}, rcSideBody{}, rcSplitter{}, rcTabs{}, rcContent{}, rcOutputHeader{}, rcOutput{}, rcStatus{};

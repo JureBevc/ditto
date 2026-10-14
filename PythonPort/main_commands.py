@@ -14,6 +14,7 @@ import find_bar as FindBar
 import palette as Palette
 import explorer as Explorer
 import scm_panel as Scm
+import search_panel as Search
 import git_commands
 
 g_recentMenu = None
@@ -60,6 +61,7 @@ def BuildMenu():
     AppendMenuW(e, MF_STRING, ID_FIND_REPLACE, "R&eplace...\tCtrl+H")
     AppendMenuW(e, MF_STRING, ID_FIND_NEXT, "Find &Next\tF3")
     AppendMenuW(e, MF_STRING, ID_FIND_PREV, "Find Pre&vious\tShift+F3")
+    AppendMenuW(e, MF_STRING, ID_VIEW_SEARCH, "Find in Fi&les...\tCtrl+Shift+F")
     AppendMenuW(e, MF_SEPARATOR, 0, None)
     AppendMenuW(e, MF_STRING, ID_EDIT_GOTO, "&Go to Line...\tCtrl+G")
     AppendMenuW(bar, MF_POPUP, e, "&Edit")
@@ -70,6 +72,7 @@ def BuildMenu():
     AppendMenuW(v, MF_STRING, ID_PALETTE_FILES, "&Go to File...\tCtrl+P")
     AppendMenuW(v, MF_SEPARATOR, 0, None)
     AppendMenuW(v, MF_STRING, ID_VIEW_EXPLORER, "&Explorer\tCtrl+Shift+E")
+    AppendMenuW(v, MF_STRING, ID_VIEW_SEARCH, "Searc&h\tCtrl+Shift+F")
     AppendMenuW(v, MF_STRING, ID_VIEW_SCM, "&Source Control\tCtrl+Shift+G")
     AppendMenuW(v, MF_STRING, ID_VIEW_SIDEBAR, "Show Side &Bar\tCtrl+B")
     AppendMenuW(v, MF_STRING, ID_VIEW_OUTPUT, "Show &Output\tCtrl+Shift+U")
@@ -151,6 +154,7 @@ def BuildAccel():
         (FCONTROL | FVIRTKEY, ord('W'), ID_FILE_CLOSETAB),
         (FCONTROL | FVIRTKEY, VK_F4, ID_FILE_CLOSETAB),
         (FCONTROL | FVIRTKEY, ord('F'), ID_FIND_SHOW),
+        (FCONTROL | FSHIFT | FVIRTKEY, ord('F'), ID_VIEW_SEARCH),
         (FCONTROL | FVIRTKEY, ord('H'), ID_FIND_REPLACE),
         (FVIRTKEY, VK_F3, ID_FIND_NEXT),
         (FSHIFT | FVIRTKEY, VK_F3, ID_FIND_PREV),
@@ -353,6 +357,7 @@ def OnCommand(id):
         M.folder = ""
         M.status = git.GitStatus()
         Explorer.SetRoot("")
+        Search.SetRoot("")
         Scm.Update(M.status)
         MW.UpdateTitle()
         InvalidateRect(M.hwnd, None, False)
@@ -419,6 +424,11 @@ def OnCommand(id):
             Scm.FocusMessage()
         else:
             SetFocus(M.explorer)
+    elif id == ID_VIEW_SEARCH:
+        M.sidebarMode = 2
+        C.g_settings.showSidebar = True
+        MW.Layout()
+        Search.Focus(C.Utf8ToWide(ed.SelectionForFind()) if ed else "")
     elif id == ID_VIEW_SIDEBAR:
         C.g_settings.showSidebar = not C.g_settings.showSidebar
         MW.Layout()

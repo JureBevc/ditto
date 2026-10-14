@@ -2,7 +2,9 @@
 #   ">query"  run a command      "query"  open a file from the folder      ":N"  go to line N
 # Ctrl+R shows the same popup as a recent-folder picker.
 # (port of palette.cpp, Palette:: in main_window.h)
+import bisect
 import os
+import re
 import stat
 import threading
 
@@ -44,9 +46,11 @@ kCommands = [Cmd(*c) for c in (
     ("Edit: Replace", R.ID_FIND_REPLACE, "Ctrl+H"),
     ("Edit: Find Next", R.ID_FIND_NEXT, "F3"),
     ("Edit: Find Previous", R.ID_FIND_PREV, "Shift+F3"),
+    ("Search: Find in Files", R.ID_VIEW_SEARCH, "Ctrl+Shift+F"),
     ("Go to Line...", R.ID_PALETTE_GOTO, "Ctrl+G"),
     ("Go to File...", R.ID_PALETTE_FILES, "Ctrl+P"),
     ("View: Show Explorer", R.ID_VIEW_EXPLORER, "Ctrl+Shift+E"),
+    ("View: Show Search", R.ID_VIEW_SEARCH, "Ctrl+Shift+F"),
     ("View: Show Source Control", R.ID_VIEW_SCM, "Ctrl+Shift+G"),
     ("View: Toggle Side Bar", R.ID_VIEW_SIDEBAR, "Ctrl+B"),
     ("View: Toggle Output Panel", R.ID_VIEW_OUTPUT, "Ctrl+Shift+U"),
@@ -118,12 +122,27 @@ g_inputBrush = None
 g_hiding = False
 g_recentMode = False  # listing recent folders instead of files/commands
 
-# file index for quick open (filled by a background thread)
-g_files = []        # paths relative to g_filesRoot
-g_filesLower = []   # LowerW of g_files (cached; the C++ lowers them on every refresh)
+# file index for quick open (filled by a background thread; immutable once published, so matcher threads can share it)
+class FileIndex:
+    def __init__(self, root="", files=None, lower=None):
+        self.root = root
+        self.files = files or []  # paths relative to root
+        self.lower = lower or []  # LowerW of files
+        # all lower paths joined by newlines + their start offsets: lets one regex pass find the candidates
+        self.blob = "\n".join(self.lower)
+        self.starts = []
+        pos = 0
+        for f in self.lower:
+            self.starts.append(pos)
+            pos += len(f) + 1
+
+
+g_index = FileIndex()
 g_filesRoot = ""
 g_filesLoading = False
 g_filesGen = 0
+g_matchGen = 0  # bumped by every Refresh; stale background matches are dropped
+kSyncMatchLimit = 20000  # larger indexes are matched on a background thread
 
 kMaxRows = 14
 _big = None  # static HFONT big in Palette::Show
@@ -200,15 +219,14 @@ def _SortKey(s):
 
 
 def StartFileScan():
-    global g_files, g_filesLower, g_filesRoot, g_filesLoading, g_filesGen
+    global g_index, g_filesRoot, g_filesLoading, g_filesGen
     root = MW.M.folder
     if not root:
         return
     if g_filesLoading and root == g_filesRoot:
         return
     if root != g_filesRoot:
-        g_files = []
-        g_filesLower = []
+        g_index = FileIndex()
     g_filesRoot = root
     g_filesLoading = True
     g_filesGen += 1
@@ -242,14 +260,13 @@ def StartFileScan():
                     elif ".~mye-" not in name:
                         files.append(r)
         files.sort(key=_SortKey)
-        lower = [C.LowerW(f) for f in files]
+        index = FileIndex(root, files, [C.LowerW(f) for f in files])
 
         def done():
-            global g_files, g_filesLower, g_filesRoot, g_filesLoading
+            global g_index, g_filesRoot, g_filesLoading
             if gen != g_filesGen:
                 return
-            g_files = files
-            g_filesLower = lower
+            g_index = index
             g_filesRoot = root
             g_filesLoading = False
             if g_pop and IsWindowVisible(g_pop):
@@ -442,6 +459,90 @@ def PopProc(h, m, w, l):
     return DefWindowProcW(h, m, w, l)
 
 
+def ScoreFile(rel, lower, q, pos):
+    """Scores a quick-open candidate (matches in the file name are preferred); None when it doesn't match.
+    pos (list or None) receives absolute indexes."""
+    fn = rel.rfind("\\") + 1
+    fpos = [] if pos is not None else None
+    sc = Fuzzy(lower[fn:], q, fpos)
+    if sc >= 0:
+        sc += 20
+        if pos is not None:
+            pos.extend(p + fn for p in fpos)
+    else:
+        if pos is not None:
+            del pos[:]
+        sc = Fuzzy(lower, q, pos)
+        if sc < 0:
+            return None
+    return sc - min(len(rel), 60) // 12  # shorter paths first
+
+
+def _Candidates(ix, q):
+    """Indexes of the paths that contain q as a subsequence (all Fuzzy can match), found by one regex pass.
+    Atomic groups take the first occurrence of each character, so the scan stays linear."""
+    pat = re.compile("^" + "".join("(?>[^\n]*?" + re.escape(c) + ")" for c in q), re.M)
+    starts = ix.starts
+    for mt in pat.finditer(ix.blob):
+        yield bisect.bisect_right(starts, mt.start()) - 1
+
+
+def MatchFiles(ix, q, gen):
+    """Best 200 matches. Safe on any thread; gen != 0 => gives up (returns None) once g_matchGen moves on."""
+    hits = []
+    files, lowers = ix.files, ix.lower
+    if not q:
+        for i in range(min(len(files), 200)):
+            hits.append((ScoreFile(files[i], lowers[i], q, None), i))
+    else:
+        n = 0
+        for i in _Candidates(ix, q):
+            n += 1
+            if gen and (n & 1023) == 0 and g_matchGen != gen:
+                return None
+            sc = ScoreFile(files[i], lowers[i], q, None)
+            if sc is not None:
+                hits.append((sc, i))
+        hits.sort(key=lambda h: (-h[0], h[1]))
+        del hits[200:]
+    res = []
+    for sc, i in hits:
+        rel = files[i]
+        fn = rel.rfind("\\") + 1
+        pos = []
+        ScoreFile(rel, lowers[i], q, pos)
+        it = Item(K_FILE)
+        it.label = rel[fn:]
+        it.detail = rel[:fn - 1] if fn else ""
+        it.path = C.JoinPath(ix.root, rel)
+        it.score = sc
+        for p in pos:
+            if p >= fn:
+                it.hlLabel.append(p - fn)
+            else:
+                it.hlDetail.append(p)
+        res.append(it)
+    return res
+
+
+def AddFileStatus(rawEmpty):
+    if not g_items:
+        g_items.append(Item(K_INFO, "Searching files..." if g_filesLoading else "No matching files"))
+    if rawEmpty:
+        hint = Item(K_INFO, "Type > to run a command, : to go to a line")
+        hint.cmd = 0
+        g_items.insert(0, hint)
+
+
+def SelectFirst():
+    global g_sel, g_top
+    g_sel = 0
+    if g_items and g_items[0].kind == K_INFO and g_items[0].cmd == 0 and len(g_items) > 1:
+        g_sel = 1
+    g_top = 0
+    Resize()
+
+
 def Create():
     global g_pop, g_edit
     C.RegisterWindowClass("MyPalette", PopProc, style=CS_DROPSHADOW, cursor=IDC_ARROW)
@@ -527,8 +628,11 @@ def _byScoreDesc(items):
 
 
 def Refresh():
-    global g_items, g_sel, g_top
+    global g_items, g_matchGen
     raw = Query()
+    g_matchGen += 1
+    gen = g_matchGen
+    prev = g_items
     g_items = []
     if g_recentMode:
         q = Squash(raw)
@@ -601,51 +705,30 @@ def Refresh():
             it = Item(K_INFO, "Open a folder to search for files")
             it.cmd = R.ID_FILE_OPENFOLDER
             g_items.append(it)
+            AddFileStatus(not raw)
+        elif not q or len(g_index.files) <= kSyncMatchLimit:
+            g_items = MatchFiles(g_index, q, 0)
+            AddFileStatus(not raw)
         else:
-            res = []
-            files = g_files
-            lowers = g_filesLower if len(g_filesLower) == len(files) else [C.LowerW(f) for f in files]
-            for idx in range(len(files)):
-                rel = files[idx]
-                fn = rel.rfind("\\") + 1
-                lower = lowers[idx]
-                fpos = []
-                fsc = Fuzzy(lower[fn:], q, fpos)  # prefer matches within the file name
-                if fsc >= 0:
-                    sc = fsc + 20
-                    pos = [p + fn for p in fpos]
-                else:
-                    pos = []
-                    sc = Fuzzy(lower, q, pos)
-                    if sc < 0:
-                        continue
-                sc -= min(len(rel), 60) // 12  # shorter paths first
-                it = Item(K_FILE)
-                it.label = rel[fn:]
-                it.detail = rel[:fn - 1] if fn else ""
-                it.path = C.JoinPath(g_filesRoot, rel)
-                it.score = sc
-                for p in pos:
-                    if p >= fn:
-                        it.hlLabel.append(p - fn)
-                    else:
-                        it.hlDetail.append(p)
-                res.append(it)
-                if not q and len(res) >= 200:
-                    break
-            if q:
-                keep = min(len(res), 200)
-                res.sort(key=lambda it: -it.score)
-                del res[keep:]
-            g_items = res
+            # big folder: match on a worker thread so typing never blocks; keep the previous file results meanwhile
+            ix = g_index
+
+            def worker():
+                res = MatchFiles(ix, q, gen)
+                if res is None or g_matchGen != gen:
+                    return
+
+                def done():
+                    global g_items
+                    if gen != g_matchGen or not g_pop or not IsWindowVisible(g_pop):
+                        return
+                    g_items = res
+                    AddFileStatus(False)
+                    SelectFirst()
+                C.RunOnUi(done)
+
+            threading.Thread(target=worker, daemon=True).start()
+            g_items = [it for it in prev if it.kind == K_FILE]
             if not g_items:
-                g_items.append(Item(K_INFO, "Searching files..." if g_filesLoading else "No matching files"))
-        if not raw:
-            hint = Item(K_INFO, "Type > to run a command, : to go to a line")
-            hint.cmd = 0
-            g_items.insert(0, hint)
-    g_sel = 0
-    if g_items and g_items[0].kind == K_INFO and g_items[0].cmd == 0 and len(g_items) > 1:
-        g_sel = 1
-    g_top = 0
-    Resize()
+                g_items.append(Item(K_INFO, "Searching files..."))
+    SelectFirst()

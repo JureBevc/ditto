@@ -251,45 +251,73 @@ def CreateBranch(from_):
     RunGitOp("Create branch", St().root, [args], True)
 
 
+def SortByRecentUse(loc, reflog):
+    """Orders local branches by how recently they were used (newest checkouts in the HEAD reflog first), current
+    branch on top; branches never checked out keep their order after those."""
+    order = [St().branch]
+
+    def add(b):
+        if b not in order:
+            order.append(b)
+    tag = "checkout: moving from "
+    for l in reflog:
+        if not l.startswith(tag):
+            continue
+        to = l.rfind(" to ")
+        if to < len(tag):
+            continue
+        add(l[to + 4:])
+        add(l[len(tag):to])
+    rank = {b: i for i, b in enumerate(order)}
+    loc.sort(key=lambda b: rank.get(b, len(order)))
+
+
+def PickCheckout(loc, rem):
+    items = ["+ Create new branch...", "+ Create new branch from..."]
+    firstLocal = len(items)
+    for b in loc:
+        items.append(b + "   (current)" if b == St().branch else b)
+    firstRemote = len(items)
+    for b in rem:
+        items.append(b + "   (remote)")
+    ok, idx = dialogs.PickBox(app.Main(), "Checkout", "Select a branch to checkout:", items, 0)
+    if not ok:
+        return
+    if idx == 0:
+        CreateBranch("")
+        return
+    if idx == 1:
+        refs = list(loc) + list(rem)
+        ok, r = dialogs.PickBox(app.Main(), "Create Branch From", "Select a ref to create the branch from:", refs, 0)
+        if ok:
+            CreateBranch(refs[r])
+        return
+    if idx < firstRemote:
+        b = loc[idx - firstLocal]
+        if b == St().branch:
+            return
+        RunGitOp("Checkout " + b, St().root, [["checkout", b]], True)
+    else:
+        r = rem[idx - firstRemote]
+        sl = r.find("/")
+        local = r if sl < 0 else r[sl + 1:]
+        if local in loc:
+            RunGitOp("Checkout " + local, St().root, [["checkout", local]], True)
+        else:
+            RunGitOp("Checkout " + r, St().root, [["checkout", "-b", local, "--track", r]], True)
+
+
 def Checkout():
     if not RequireRepo():
         return
 
-    def got(loc, rem):
-        items = ["+ Create new branch...", "+ Create new branch from..."]
-        firstLocal = len(items)
-        for b in loc:
-            items.append(b + "   (current)" if b == St().branch else b)
-        firstRemote = len(items)
-        for b in rem:
-            items.append(b + "   (remote)")
-        ok, idx = dialogs.PickBox(app.Main(), "Checkout", "Select a branch to checkout:", items, 0)
-        if not ok:
-            return
-        if idx == 0:
-            CreateBranch("")
-            return
-        if idx == 1:
-            refs = list(loc) + list(rem)
-            ok, r = dialogs.PickBox(app.Main(), "Create Branch From", "Select a ref to create the branch from:", refs, 0)
-            if ok:
-                CreateBranch(refs[r])
-            return
-        if idx < firstRemote:
-            b = loc[idx - firstLocal]
-            if b == St().branch:
-                return
-            RunGitOp("Checkout " + b, St().root, [["checkout", b]], True)
-        else:
-            r = rem[idx - firstRemote]
-            sl = r.find("/")
-            local = r if sl < 0 else r[sl + 1:]
-            if local in loc:
-                RunGitOp("Checkout " + local, St().root, [["checkout", local]], True)
-            else:
-                RunGitOp("Checkout " + r, St().root, [["checkout", "-b", local, "--track", r]], True)
+    def gotReflog(reflog):
+        def got(loc, rem):
+            SortByRecentUse(loc, reflog)
+            PickCheckout(loc, rem)
+        ListBranches(got)
 
-    ListBranches(got)
+    QueryLines(["reflog", "--format=%gs", "-n", "2000"], gotReflog)
 
 
 def DeleteBranch():

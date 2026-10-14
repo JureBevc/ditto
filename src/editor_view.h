@@ -45,6 +45,7 @@ public:
     void Paste();
     void SelectAll();
     void GotoLine(uint64_t line, bool center = true);  // 0-based
+    void SelectInLine(uint64_t line, uint64_t col, uint64_t len);  // 0-based line, byte column and length
     void SetWrap(bool on);
     bool WrapActive() const { return wrap_; }
     void FontChanged();

@@ -31,9 +31,11 @@ const Cmd kCommands[] = {
     {L"Edit: Replace", ID_FIND_REPLACE, L"Ctrl+H"},
     {L"Edit: Find Next", ID_FIND_NEXT, L"F3"},
     {L"Edit: Find Previous", ID_FIND_PREV, L"Shift+F3"},
+    {L"Search: Find in Files", ID_VIEW_SEARCH, L"Ctrl+Shift+F"},
     {L"Go to Line...", ID_PALETTE_GOTO, L"Ctrl+G"},
     {L"Go to File...", ID_PALETTE_FILES, L"Ctrl+P"},
     {L"View: Show Explorer", ID_VIEW_EXPLORER, L"Ctrl+Shift+E"},
+    {L"View: Show Search", ID_VIEW_SEARCH, L"Ctrl+Shift+F"},
     {L"View: Show Source Control", ID_VIEW_SCM, L"Ctrl+Shift+G"},
     {L"View: Toggle Side Bar", ID_VIEW_SIDEBAR, L"Ctrl+B"},
     {L"View: Toggle Output Panel", ID_VIEW_OUTPUT, L"Ctrl+Shift+U"},
@@ -96,11 +98,18 @@ HBRUSH g_inputBrush;
 bool g_hiding = false;
 bool g_recentMode = false;  // listing recent folders instead of files/commands
 
-// file index for quick open (filled by a background thread)
-std::vector<std::wstring> g_files;  // paths relative to g_filesRoot
+// file index for quick open (filled by a background thread; immutable once published, so matcher threads can share it)
+struct FileIndex {
+    std::wstring root;
+    std::vector<std::wstring> files;  // paths relative to root
+    std::vector<std::wstring> lower;  // LowerW of files
+};
+std::shared_ptr<const FileIndex> g_index = std::make_shared<FileIndex>();
 std::wstring g_filesRoot;
 bool g_filesLoading = false;
 std::atomic<uint64_t> g_filesGen{0};
+std::atomic<uint64_t> g_matchGen{0};  // bumped by every Refresh; stale background matches are dropped
+const size_t kSyncMatchLimit = 20000;  // larger indexes are matched on a background thread
 
 const int kMaxRows = 14;
 int EditH() { return S(40); }
@@ -109,7 +118,7 @@ int RowH() { return S(26); }
 bool IsSep(wchar_t c) { return c == L' ' || c == L'/' || c == L'\\' || c == L':' || c == L'.' || c == L'-' || c == L'_'; }
 
 // Fuzzy subsequence match (case-insensitive). Returns -1 if no match; positions receive matched indexes.
-int Fuzzy(const std::wstring& candLower, const std::wstring& q, std::vector<int>* pos) {
+int Fuzzy(const wchar_t* candLower, size_t n, const std::wstring& q, std::vector<int>* pos) {
     if (q.empty()) return 0;
     int score = 0;
     size_t ci = 0;
@@ -117,7 +126,7 @@ int Fuzzy(const std::wstring& candLower, const std::wstring& q, std::vector<int>
     for (wchar_t qc : q) {
         // prefer a match at a word start ahead of the plain next occurrence
         size_t found = std::wstring::npos, wordStart = std::wstring::npos;
-        for (size_t k = ci; k < candLower.size(); ++k) {
+        for (size_t k = ci; k < n; ++k) {
             if (candLower[k] != qc) continue;
             if (found == std::wstring::npos) found = k;
             if (k == 0 || IsSep(candLower[k - 1])) { wordStart = k; break; }
@@ -135,6 +144,9 @@ int Fuzzy(const std::wstring& candLower, const std::wstring& q, std::vector<int>
         ci = k + 1;
     }
     return score;
+}
+int Fuzzy(const std::wstring& candLower, const std::wstring& q, std::vector<int>* pos) {
+    return Fuzzy(candLower.c_str(), candLower.size(), q, pos);
 }
 
 std::wstring Query() {
@@ -156,12 +168,14 @@ void StartFileScan() {
     std::wstring root = M.folder;
     if (root.empty()) return;
     if (g_filesLoading && root == g_filesRoot) return;
-    if (root != g_filesRoot) g_files.clear();
+    if (root != g_filesRoot) g_index = std::make_shared<FileIndex>();
     g_filesRoot = root;
     g_filesLoading = true;
     uint64_t gen = ++g_filesGen;
     std::thread([root, gen]() {
-        auto files = std::make_shared<std::vector<std::wstring>>();
+        auto index = std::make_shared<FileIndex>();
+        index->root = root;
+        std::vector<std::wstring>* files = &index->files;
         std::vector<std::wstring> stack = {L""};
         while (!stack.empty() && files->size() < 500000) {
             if (g_filesGen != gen) return;
@@ -187,9 +201,11 @@ void StartFileScan() {
         std::sort(files->begin(), files->end(), [](const std::wstring& a, const std::wstring& b) {
             return CompareStringOrdinal(a.c_str(), -1, b.c_str(), -1, TRUE) == CSTR_LESS_THAN;
         });
-        RunOnUi([files, gen, root]() {
+        index->lower.reserve(files->size());
+        for (const auto& f : *files) index->lower.push_back(LowerW(f));
+        RunOnUi([index, gen, root]() {
             if (gen != g_filesGen) return;
-            g_files = std::move(*files);
+            g_index = index;
             g_filesRoot = root;
             g_filesLoading = false;
             if (g_pop && IsWindowVisible(g_pop)) Palette::Refresh();
@@ -377,6 +393,82 @@ LRESULT CALLBACK PopProc(HWND h, UINT m, WPARAM w, LPARAM l) {
     return DefWindowProcW(h, m, w, l);
 }
 
+// Scores a quick-open candidate (matches in the file name are preferred); pos receives absolute indexes.
+bool ScoreFile(const std::wstring& rel, const std::wstring& lower, const std::wstring& q, int* score, std::vector<int>* pos) {
+    size_t sl = rel.find_last_of(L'\\');
+    size_t fn = sl == std::wstring::npos ? 0 : sl + 1;
+    std::vector<int> fpos;
+    int sc = Fuzzy(lower.c_str() + fn, lower.size() - fn, q, pos ? &fpos : nullptr);
+    if (sc >= 0) {
+        sc += 20;
+        if (pos)
+            for (int p : fpos) pos->push_back(p + (int)fn);
+    } else {
+        if (pos) pos->clear();
+        sc = Fuzzy(lower, q, pos);
+        if (sc < 0) return false;
+    }
+    *score = sc - (int)std::min<size_t>(rel.size(), 60) / 12;  // shorter paths first
+    return true;
+}
+
+// Best 200 matches. Safe on any thread; gen != 0 => gives up (returns nothing) once g_matchGen moves on.
+std::vector<Item> MatchFiles(const FileIndex& ix, const std::wstring& q, uint64_t gen) {
+    struct Hit { int score; size_t idx; };
+    std::vector<Hit> hits;
+    for (size_t i = 0; i < ix.files.size(); ++i) {
+        if (gen && (i & 1023) == 0 && g_matchGen != gen) return {};
+        int sc;
+        if (!ScoreFile(ix.files[i], ix.lower[i], q, &sc, nullptr)) continue;
+        hits.push_back({sc, i});
+        if (q.empty() && hits.size() >= 200) break;
+    }
+    if (!q.empty()) {
+        size_t keep = std::min<size_t>(hits.size(), 200);
+        std::partial_sort(hits.begin(), hits.begin() + keep, hits.end(),
+                          [](const Hit& a, const Hit& b) { return a.score != b.score ? a.score > b.score : a.idx < b.idx; });
+        hits.resize(keep);
+    }
+    std::vector<Item> res;
+    res.reserve(hits.size());
+    for (const Hit& h : hits) {
+        const std::wstring& rel = ix.files[h.idx];
+        size_t sl = rel.find_last_of(L'\\');
+        size_t fn = sl == std::wstring::npos ? 0 : sl + 1;
+        std::vector<int> pos;
+        int sc;
+        ScoreFile(rel, ix.lower[h.idx], q, &sc, &pos);
+        Item it;
+        it.kind = K_FILE;
+        it.label = rel.substr(fn);
+        it.detail = fn ? rel.substr(0, fn - 1) : L"";
+        it.path = JoinPath(ix.root, rel);
+        it.score = h.score;
+        for (int p : pos) {
+            if (p >= (int)fn) it.hlLabel.push_back(p - (int)fn);
+            else it.hlDetail.push_back(p);
+        }
+        res.push_back(std::move(it));
+    }
+    return res;
+}
+
+void AddFileStatus(bool rawEmpty) {
+    if (g_items.empty()) g_items.push_back(Item{K_INFO, g_filesLoading ? L"Searching files..." : L"No matching files"});
+    if (rawEmpty) {
+        Item hint{K_INFO, L"Type > to run a command, : to go to a line"};
+        hint.cmd = 0;
+        g_items.insert(g_items.begin(), hint);
+    }
+}
+
+void SelectFirst() {
+    g_sel = 0;
+    if (!g_items.empty() && g_items[0].kind == K_INFO && g_items[0].cmd == 0 && g_items.size() > 1) g_sel = 1;
+    g_top = 0;
+    Resize();
+}
+
 void Create() {
     WNDCLASSEXW wc = {sizeof(wc)};
     wc.lpfnWndProc = PopProc;
@@ -435,7 +527,9 @@ void Hide(bool restoreFocus) {
 
 void Refresh() {
     std::wstring raw = Query();
-    g_items.clear();
+    uint64_t gen = ++g_matchGen;
+    std::vector<Item> prev;
+    prev.swap(g_items);
     if (g_recentMode) {
         std::wstring q = Squash(raw);
         auto& r = g_settings.recentFolders;
@@ -506,58 +600,29 @@ void Refresh() {
             Item it{K_INFO, L"Open a folder to search for files"};
             it.cmd = ID_FILE_OPENFOLDER;
             g_items.push_back(it);
+            AddFileStatus(raw.empty());
+        } else if (q.empty() || g_index->files.size() <= kSyncMatchLimit) {
+            g_items = MatchFiles(*g_index, q, 0);
+            AddFileStatus(raw.empty());
         } else {
-            std::vector<Item> res;
-            for (const auto& rel : g_files) {
-                size_t sl = rel.find_last_of(L'\\');
-                size_t fn = sl == std::wstring::npos ? 0 : sl + 1;
-                std::wstring lower = LowerW(rel);
-                std::vector<int> pos;
-                int sc;
-                std::vector<int> fpos;
-                int fsc = Fuzzy(lower.substr(fn), q, &fpos);  // prefer matches within the file name
-                if (fsc >= 0) {
-                    sc = fsc + 20;
-                    for (int& p : fpos) p += (int)fn;
-                    pos = fpos;
-                } else {
-                    sc = Fuzzy(lower, q, &pos);
-                    if (sc < 0) continue;
-                }
-                sc -= (int)std::min<size_t>(rel.size(), 60) / 12;  // shorter paths first
-                Item it;
-                it.kind = K_FILE;
-                it.label = rel.substr(fn);
-                it.detail = fn ? rel.substr(0, fn - 1) : L"";
-                it.path = JoinPath(g_filesRoot, rel);
-                it.score = sc;
-                for (int p : pos) {
-                    if (p >= (int)fn) it.hlLabel.push_back(p - (int)fn);
-                    else it.hlDetail.push_back(p);
-                }
-                res.push_back(std::move(it));
-                if (q.empty() && res.size() >= 200) break;
-            }
-            if (!q.empty()) {
-                size_t keep = std::min<size_t>(res.size(), 200);
-                std::partial_sort(res.begin(), res.begin() + keep, res.end(),
-                                  [](const Item& a, const Item& b) { return a.score > b.score; });
-                res.resize(keep);
-            }
-            g_items = std::move(res);
-            if (g_items.empty())
-                g_items.push_back(Item{K_INFO, g_filesLoading ? L"Searching files..." : L"No matching files"});
-        }
-        if (raw.empty()) {
-            Item hint{K_INFO, L"Type > to run a command, : to go to a line"};
-            hint.cmd = 0;
-            g_items.insert(g_items.begin(), hint);
+            // big folder: match on a worker thread so typing never blocks; keep the previous file results meanwhile
+            std::shared_ptr<const FileIndex> ix = g_index;
+            std::thread([ix, q, gen]() {
+                auto res = std::make_shared<std::vector<Item>>(MatchFiles(*ix, q, gen));
+                if (g_matchGen != gen) return;
+                RunOnUi([res, gen]() {
+                    if (gen != g_matchGen || !g_pop || !IsWindowVisible(g_pop)) return;
+                    g_items = std::move(*res);
+                    AddFileStatus(false);
+                    SelectFirst();
+                });
+            }).detach();
+            for (auto& it : prev)
+                if (it.kind == K_FILE) g_items.push_back(std::move(it));
+            if (g_items.empty()) g_items.push_back(Item{K_INFO, L"Searching files..."});
         }
     }
-    g_sel = 0;
-    if (!g_items.empty() && g_items[0].kind == K_INFO && g_items[0].cmd == 0 && g_items.size() > 1) g_sel = 1;
-    g_top = 0;
-    Resize();
+    SelectFirst();
 }
 
 }  // namespace Palette

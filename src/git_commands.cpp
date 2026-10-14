@@ -189,37 +189,63 @@ void CreateBranch(const std::wstring& from) {
     RunGitOp(L"Create branch", St().root, {args}, true);
 }
 
+// Orders local branches by how recently they were used (newest checkouts in the HEAD reflog first), current branch
+// on top; branches never checked out keep their order after those.
+void SortByRecentUse(std::vector<std::wstring>& loc, const std::vector<std::wstring>& reflog) {
+    std::vector<std::wstring> order = {St().branch};
+    auto add = [&](const std::wstring& b) {
+        if (std::find(order.begin(), order.end(), b) == order.end()) order.push_back(b);
+    };
+    const std::wstring tag = L"checkout: moving from ";
+    for (const auto& l : reflog) {
+        if (l.compare(0, tag.size(), tag) != 0) continue;
+        size_t to = l.rfind(L" to ");
+        if (to == std::wstring::npos || to < tag.size()) continue;
+        add(l.substr(to + 4));
+        add(l.substr(tag.size(), to - tag.size()));
+    }
+    auto rank = [&](const std::wstring& b) { return std::find(order.begin(), order.end(), b) - order.begin(); };
+    std::stable_sort(loc.begin(), loc.end(), [&](const std::wstring& a, const std::wstring& b) { return rank(a) < rank(b); });
+}
+
+void PickCheckout(std::vector<std::wstring> loc, std::vector<std::wstring> rem) {
+    std::vector<std::wstring> items = {L"+ Create new branch...", L"+ Create new branch from..."};
+    size_t firstLocal = items.size();
+    for (auto& b : loc) items.push_back(b == St().branch ? b + L"   (current)" : b);
+    size_t firstRemote = items.size();
+    for (auto& b : rem) items.push_back(b + L"   (remote)");
+    int idx;
+    if (!PickBox(App::Main(), L"Checkout", L"Select a branch to checkout:", items, idx)) return;
+    if (idx == 0) { CreateBranch(L""); return; }
+    if (idx == 1) {
+        std::vector<std::wstring> refs = loc;
+        refs.insert(refs.end(), rem.begin(), rem.end());
+        int r;
+        if (PickBox(App::Main(), L"Create Branch From", L"Select a ref to create the branch from:", refs, r)) CreateBranch(refs[(size_t)r]);
+        return;
+    }
+    if ((size_t)idx < firstRemote) {
+        std::wstring b = loc[(size_t)idx - firstLocal];
+        if (b == St().branch) return;
+        RunGitOp(L"Checkout " + b, St().root, {{L"checkout", b}}, true);
+    } else {
+        std::wstring r = rem[(size_t)idx - firstRemote];
+        size_t sl = r.find(L'/');
+        std::wstring local = sl == std::wstring::npos ? r : r.substr(sl + 1);
+        if (std::find(loc.begin(), loc.end(), local) != loc.end())
+            RunGitOp(L"Checkout " + local, St().root, {{L"checkout", local}}, true);
+        else
+            RunGitOp(L"Checkout " + r, St().root, {{L"checkout", L"-b", local, L"--track", r}}, true);
+    }
+}
+
 void Checkout() {
     if (!RequireRepo()) return;
-    ListBranches([](std::vector<std::wstring> loc, std::vector<std::wstring> rem) {
-        std::vector<std::wstring> items = {L"+ Create new branch...", L"+ Create new branch from..."};
-        size_t firstLocal = items.size();
-        for (auto& b : loc) items.push_back(b == St().branch ? b + L"   (current)" : b);
-        size_t firstRemote = items.size();
-        for (auto& b : rem) items.push_back(b + L"   (remote)");
-        int idx;
-        if (!PickBox(App::Main(), L"Checkout", L"Select a branch to checkout:", items, idx)) return;
-        if (idx == 0) { CreateBranch(L""); return; }
-        if (idx == 1) {
-            std::vector<std::wstring> refs = loc;
-            refs.insert(refs.end(), rem.begin(), rem.end());
-            int r;
-            if (PickBox(App::Main(), L"Create Branch From", L"Select a ref to create the branch from:", refs, r)) CreateBranch(refs[(size_t)r]);
-            return;
-        }
-        if ((size_t)idx < firstRemote) {
-            std::wstring b = loc[(size_t)idx - firstLocal];
-            if (b == St().branch) return;
-            RunGitOp(L"Checkout " + b, St().root, {{L"checkout", b}}, true);
-        } else {
-            std::wstring r = rem[(size_t)idx - firstRemote];
-            size_t sl = r.find(L'/');
-            std::wstring local = sl == std::wstring::npos ? r : r.substr(sl + 1);
-            if (std::find(loc.begin(), loc.end(), local) != loc.end())
-                RunGitOp(L"Checkout " + local, St().root, {{L"checkout", local}}, true);
-            else
-                RunGitOp(L"Checkout " + r, St().root, {{L"checkout", L"-b", local, L"--track", r}}, true);
-        }
+    QueryLines({L"reflog", L"--format=%gs", L"-n", L"2000"}, [](std::vector<std::wstring> reflog) {
+        ListBranches([reflog](std::vector<std::wstring> loc, std::vector<std::wstring> rem) {
+            SortByRecentUse(loc, reflog);
+            PickCheckout(loc, rem);
+        });
     });
 }
 

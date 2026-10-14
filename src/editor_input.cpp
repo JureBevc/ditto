@@ -380,6 +380,18 @@ void EditorView::GotoLine(uint64_t line, bool center) {
     Notify();
 }
 
+void EditorView::SelectInLine(uint64_t line, uint64_t col, uint64_t len) {
+    uint64_t lc = buf->LineCount();
+    line = std::min(line, lc - 1);
+    uint64_t s = buf->LineStart(line), e = buf->LineEnd(line);
+    anchor_ = std::min(s + col, e);
+    caret_ = std::min(anchor_ + len, e);
+    desiredCol_ = -1;
+    EnsureCaretVisible(true);
+    InvalidateRect(hwnd, nullptr, FALSE);
+    Notify();
+}
+
 void EditorView::OnChar(wchar_t ch) {
     if (ch < 0x20 || ch == 0x7F) return;  // controls handled in OnKeyDown
     if (GetKeyState(VK_CONTROL) < 0 && GetKeyState(VK_MENU) >= 0) return;

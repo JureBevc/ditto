@@ -1341,6 +1341,7 @@ _f(imm32, "ImmSetCompositionWindow", BOOL, HIMC, c_void_p)
 _f(imm32, "ImmSetCompositionFontW", BOOL, HIMC, c_void_p)
 _f(imm32, "ImmGetCompositionStringW", LONG, HIMC, DWORD, c_void_p, DWORD)
 _f(shlwapi, "StrCmpLogicalW", c_int, LPCWSTR, LPCWSTR)
+_f(shlwapi, "PathMatchSpecW", BOOL, LPCWSTR, LPCWSTR)
 
 # ---- winhttp ----
 _f(winhttp, "WinHttpOpen", HANDLE, LPCWSTR, DWORD, LPCWSTR, LPCWSTR, DWORD)

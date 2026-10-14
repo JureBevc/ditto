@@ -134,7 +134,7 @@ void LoadSettings() {
     Settings& s = g_settings;
     s.fontName = IniStr(L"FontName", L"Consolas");
     s.fontSize = std::max(6, std::min(72, IniInt(L"FontSize", 11)));
-    s.dark = IniInt(L"Dark", 0) != 0;
+    s.dark = IniInt(L"Dark", 1) != 0;
     s.wrap = IniInt(L"WordWrap", 0) != 0;
     s.tabSize = std::max(1, std::min(16, IniInt(L"TabSize", 4)));
     s.sidebarWidth = std::max(120, std::min(1200, IniInt(L"SidebarWidth", 260)));

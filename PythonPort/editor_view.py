@@ -1447,6 +1447,19 @@ class EditorView:
         InvalidateRect(self.hwnd, None, False)
         self.Notify()
 
+    def SelectInLine(self, line, col, len_):
+        """0-based line, byte column and length."""
+        lc = self.buf.LineCount()
+        line = min(line, lc - 1)
+        s = self.buf.LineStart(line)
+        e = self.buf.LineEnd(line)
+        self.anchor_ = min(s + col, e)
+        self.caret_ = min(self.anchor_ + len_, e)
+        self.desiredCol_ = -1
+        self.EnsureCaretVisible(True)
+        InvalidateRect(self.hwnd, None, False)
+        self.Notify()
+
     def OnChar(self, ch):
         if ch < 0x20 or ch == 0x7F:
             return  # controls handled in OnKeyDown

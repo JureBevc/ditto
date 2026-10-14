@@ -12,6 +12,7 @@ import terminal as Term
 import find_bar as FindBar
 import explorer as Explorer
 import scm_panel as Scm
+import search_panel as Search
 import diff_view as DiffView
 import log_view as LogView
 import main_commands
@@ -53,6 +54,7 @@ class MainState:
         self.hwnd = None
         self.explorer = None
         self.scm = None
+        self.search = None
         self.findBar = None
         self.output = None
         self.menu = None
@@ -68,7 +70,8 @@ class MainState:
         self.gitPending = False
         self.gitQueued = False
         self.statusText = ""
-        self.sidebarMode = 0  # 0 explorer, 1 source control
+        self.sidebarMode = 0  # 0 explorer, 1 source control, 2 search
+        self.sideTabs = []  # (RECT, mode) per sidebar header label (set when painted)
 
         # geometry (client coordinates)
         self.rcSideHeader = RECT()
@@ -178,6 +181,7 @@ def ApplyThemeAll():
     SetWindowTheme(M.output, _explorer_theme(), None)
     Explorer.ThemeChanged()
     Scm.ThemeChanged()
+    Search.ThemeChanged()
     FindBar.ThemeChanged()
     Term.ThemeChanged()
     for t in M.tabs:
@@ -246,17 +250,19 @@ def Layout():
         M.rcSideHeader = RECT(0, 0, sideW, S(34))
         M.rcSideBody = RECT(0, S(34), sideW, bottom)
         M.rcSplitter = RECT(sideW, 0, sideW + S(4), bottom)
-        show = M.explorer if M.sidebarMode == 0 else M.scm
-        hide = M.scm if M.sidebarMode == 0 else M.explorer
-        MoveWindow(show, 0, M.rcSideBody.top, sideW, bottom - M.rcSideBody.top, True)
-        ShowWindow(show, SW_SHOW)
-        ShowWindow(hide, SW_HIDE)
+        panes = (M.explorer, M.scm, M.search)
+        MoveWindow(panes[M.sidebarMode], 0, M.rcSideBody.top, sideW, bottom - M.rcSideBody.top, True)
+        ShowWindow(panes[M.sidebarMode], SW_SHOW)
+        for i in range(3):
+            if i != M.sidebarMode:
+                ShowWindow(panes[i], SW_HIDE)
     else:
         M.rcSideHeader = RECT()
         M.rcSideBody = RECT()
         M.rcSplitter = RECT()
         ShowWindow(M.explorer, SW_HIDE)
         ShowWindow(M.scm, SW_HIDE)
+        ShowWindow(M.search, SW_HIDE)
     x0 = M.rcSplitter.right if st.showSidebar else 0
     M.rcTabs = RECT(x0, 0, rc.right, S(34))
     y = M.rcTabs.bottom
@@ -510,27 +516,35 @@ def PaintSideHeader(dc):
     if r.right <= r.left:
         return
     FillC(dc, r, t.panelBg)
-    half = (r.right - r.left) // 2
-    a = RECT(r.left, r.top, r.left + half, r.bottom)
-    b = RECT(r.left + half, r.top, r.right, r.bottom)
     changes = len(M.status.files)
     scmLabel = "SOURCE CONTROL"
     if changes:
         scmLabel += " (" + str(changes) + ")"
-    Text(dc, "EXPLORER", a, t.panelFg if M.sidebarMode == 0 else t.panelFgDim,
-         DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS,
-         C.g_uiFontBold if M.sidebarMode == 0 else C.g_uiFont)
-    Text(dc, scmLabel, b, t.panelFg if M.sidebarMode == 1 else t.panelFgDim,
-         DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS,
-         C.g_uiFontBold if M.sidebarMode == 1 else C.g_uiFont)
-    u = a if M.sidebarMode == 0 else b
-    FillC(dc, RECT(u.left + S(12), u.bottom - S(3), u.right - S(12), u.bottom - S(1)), t.accent)
+    labels = ("EXPLORER", "SEARCH", scmLabel)
+    modes = (0, 2, 1)
+    # widths proportional to the labels, so the short SEARCH doesn't squeeze SOURCE CONTROL
+    SelectObject(dc, C.g_uiFontBold)
+    want = [text_extent(dc, s).cx + S(20) for s in labels]
+    total = sum(want)
+    M.sideTabs = []
+    x = r.left
+    for i in range(3):
+        w = r.right - x if i == 2 else MulDiv(want[i], r.right - r.left, total)
+        a = RECT(x, r.top, x + w, r.bottom)
+        active = M.sidebarMode == modes[i]
+        Text(dc, labels[i], a, t.panelFg if active else t.panelFgDim,
+             DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS, C.g_uiFontBold if active else C.g_uiFont)
+        if active:
+            FillC(dc, RECT(a.left + S(8), a.bottom - S(3), a.right - S(8), a.bottom - S(1)), t.accent)
+        M.sideTabs.append((a, modes[i]))
+        x += w
 
 
 _welcomeLines = [
     "Ctrl+N\tNew file", "Ctrl+O\tOpen file", "Ctrl+Shift+O\tOpen folder",
     "Ctrl+R\tOpen recent folder",
     "Ctrl+Shift+E\tExplorer", "Ctrl+Shift+G\tSource control", "Ctrl+F / Ctrl+H\tFind / replace",
+    "Ctrl+Shift+F\tSearch in files",
     "Ctrl+G\tGo to line", "Alt+Z\tToggle word wrap", "Ctrl+`\tToggle terminal",
 ]
 
@@ -899,8 +913,11 @@ def MainProc(h, m, w, l):
                 HidePanel()
             return 0
         if PtInRect(M.rcSideHeader, pt):
-            mode = 0 if pt.x < (M.rcSideHeader.left + M.rcSideHeader.right) // 2 else 1
-            main_commands.OnCommand(ID_VIEW_EXPLORER if mode == 0 else ID_VIEW_SCM)
+            for rc_, mode in M.sideTabs:
+                if PtInRect(rc_, pt):
+                    main_commands.OnCommand(ID_VIEW_EXPLORER if mode == 0 else ID_VIEW_SCM if mode == 1 else
+                                            ID_VIEW_SEARCH)
+                    break
             return 0
         if PtInRect(M.rcTabOverflow, pt):
             OverflowMenu()
@@ -998,6 +1015,7 @@ def MainProc(h, m, w, l):
             if t.kind == Tab.Editor:
                 t.ed.FontChanged()
         Explorer.ThemeChanged()
+        Search.ThemeChanged()
         Layout()
         Term.FontChanged()
         RedrawWindow(h, None, None, RDW_INVALIDATE | RDW_ALLCHILDREN)
@@ -1132,6 +1150,7 @@ def App_OpenFolder(folder):
     M.folder = f
     M.status = git.GitStatus()
     Explorer.SetRoot(f)
+    Search.SetRoot(f)
     C.AddRecentFolder(f)
     Scm.Update(M.status)
     App_RefreshGit()
@@ -1240,6 +1259,7 @@ def CreateMainWindow():
     C.ApplyTheme(st.dark)
     M.explorer = Explorer.Create(h)
     M.scm = Scm.Create(h)
+    M.search = Search.Create(h)
     M.findBar = FindBar.Create(h)
     M.output = CreateWindowExW(0, "EDIT", "",
                                WS_CHILD | WS_VSCROLL | ES_MULTILINE | ES_READONLY | ES_AUTOVSCROLL | ES_NOHIDESEL,

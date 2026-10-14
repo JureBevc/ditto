@@ -68,6 +68,7 @@ void ApplyThemeAll() {
     SetWindowTheme(M.output, g_settings.dark ? L"DarkMode_Explorer" : L"Explorer", nullptr);
     Explorer::ThemeChanged();
     Scm::ThemeChanged();
+    Search::ThemeChanged();
     FindBar::ThemeChanged();
     Term::ThemeChanged();
     for (auto& t : M.tabs) {
@@ -133,15 +134,16 @@ void Layout() {
         M.rcSideHeader = RECT{0, 0, sideW, S(34)};
         M.rcSideBody = RECT{0, S(34), sideW, bottom};
         M.rcSplitter = RECT{sideW, 0, sideW + S(4), bottom};
-        HWND show = M.sidebarMode == 0 ? M.explorer : M.scm;
-        HWND hide = M.sidebarMode == 0 ? M.scm : M.explorer;
-        MoveWindow(show, 0, M.rcSideBody.top, sideW, bottom - M.rcSideBody.top, TRUE);
-        ShowWindow(show, SW_SHOW);
-        ShowWindow(hide, SW_HIDE);
+        HWND panes[3] = {M.explorer, M.scm, M.search};
+        MoveWindow(panes[M.sidebarMode], 0, M.rcSideBody.top, sideW, bottom - M.rcSideBody.top, TRUE);
+        ShowWindow(panes[M.sidebarMode], SW_SHOW);
+        for (int i = 0; i < 3; ++i)
+            if (i != M.sidebarMode) ShowWindow(panes[i], SW_HIDE);
     } else {
         M.rcSideHeader = M.rcSideBody = M.rcSplitter = RECT{};
         ShowWindow(M.explorer, SW_HIDE);
         ShowWindow(M.scm, SW_HIDE);
+        ShowWindow(M.search, SW_HIDE);
     }
     int x0 = g_settings.showSidebar ? M.rcSplitter.right : 0;
     M.rcTabs = RECT{x0, 0, rc.right, S(34)};
@@ -366,18 +368,34 @@ static void PaintSideHeader(HDC dc) {
     RECT r = M.rcSideHeader;
     if (r.right <= r.left) return;
     FillC(dc, r, t.panelBg);
-    int half = (r.right - r.left) / 2;
-    RECT a = {r.left, r.top, r.left + half, r.bottom}, b = {r.left + half, r.top, r.right, r.bottom};
     int changes = (int)M.status.files.size();
     std::wstring scmLabel = L"SOURCE CONTROL";
     if (changes) scmLabel += L" (" + std::to_wstring(changes) + L")";
-    Text(dc, L"EXPLORER", a, M.sidebarMode == 0 ? t.panelFg : t.panelFgDim, DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS,
-         M.sidebarMode == 0 ? g_uiFontBold : g_uiFont);
-    Text(dc, scmLabel, b, M.sidebarMode == 1 ? t.panelFg : t.panelFgDim, DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS,
-         M.sidebarMode == 1 ? g_uiFontBold : g_uiFont);
-    RECT u = M.sidebarMode == 0 ? a : b;
-    RECT ul = {u.left + S(12), u.bottom - S(3), u.right - S(12), u.bottom - S(1)};
-    FillC(dc, ul, t.accent);
+    const std::wstring labels[3] = {L"EXPLORER", L"SEARCH", scmLabel};
+    const int modes[3] = {0, 2, 1};
+    // widths proportional to the labels, so the short SEARCH doesn't squeeze SOURCE CONTROL
+    int want[3], sum = 0;
+    SelectObject(dc, g_uiFontBold);
+    for (int i = 0; i < 3; ++i) {
+        SIZE sz;
+        GetTextExtentPoint32W(dc, labels[i].c_str(), (int)labels[i].size(), &sz);
+        want[i] = sz.cx + S(20);
+        sum += want[i];
+    }
+    int x = r.left;
+    for (int i = 0; i < 3; ++i) {
+        int w = i == 2 ? r.right - x : MulDiv(want[i], r.right - r.left, sum);
+        RECT a = {x, r.top, x + w, r.bottom};
+        bool active = M.sidebarMode == modes[i];
+        Text(dc, labels[i], a, active ? t.panelFg : t.panelFgDim, DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS,
+             active ? g_uiFontBold : g_uiFont);
+        if (active) {
+            RECT ul = {a.left + S(8), a.bottom - S(3), a.right - S(8), a.bottom - S(1)};
+            FillC(dc, ul, t.accent);
+        }
+        M.sideTabs[i] = {a, modes[i]};
+        x += w;
+    }
 }
 
 static void PaintWelcome(HDC dc) {
@@ -398,6 +416,7 @@ static void PaintWelcome(HDC dc) {
         L"Ctrl+N\tNew file",           L"Ctrl+O\tOpen file",          L"Ctrl+Shift+O\tOpen folder",
         L"Ctrl+R\tOpen recent folder",
         L"Ctrl+Shift+E\tExplorer",     L"Ctrl+Shift+G\tSource control", L"Ctrl+F / Ctrl+H\tFind / replace",
+        L"Ctrl+Shift+F\tSearch in files",
         L"Ctrl+G\tGo to line",         L"Alt+Z\tToggle word wrap",     L"Ctrl+`\tToggle terminal",
     };
     for (auto l : lines) {
@@ -720,8 +739,11 @@ static LRESULT CALLBACK MainProc(HWND h, UINT m, WPARAM w, LPARAM l) {
             return 0;
         }
         if (PtInRect(&M.rcSideHeader, pt)) {
-            int mode = pt.x < (M.rcSideHeader.left + M.rcSideHeader.right) / 2 ? 0 : 1;
-            OnCommand(mode == 0 ? ID_VIEW_EXPLORER : ID_VIEW_SCM);
+            for (auto& st : M.sideTabs) {
+                if (!PtInRect(&st.rc, pt)) continue;
+                OnCommand(st.mode == 0 ? ID_VIEW_EXPLORER : st.mode == 1 ? ID_VIEW_SCM : ID_VIEW_SEARCH);
+                break;
+            }
             return 0;
         }
         if (PtInRect(&M.rcTabOverflow, pt)) { OverflowMenu(); return 0; }
@@ -816,6 +838,7 @@ static LRESULT CALLBACK MainProc(HWND h, UINT m, WPARAM w, LPARAM l) {
         for (auto& t : M.tabs)
             if (t.kind == Tab::Editor) t.ed->FontChanged();
         Explorer::ThemeChanged();
+        Search::ThemeChanged();
         Layout();
         Term::FontChanged();
         RedrawWindow(h, nullptr, nullptr, RDW_INVALIDATE | RDW_ALLCHILDREN);
@@ -961,6 +984,7 @@ void OpenFolder(const std::wstring& folder) {
     M.folder = f;
     M.status = GitStatus();
     Explorer::SetRoot(f);
+    Search::SetRoot(f);
     AddRecentFolder(f);
     Scm::Update(M.status);
     RefreshGit();
@@ -1060,6 +1084,7 @@ HWND CreateMainWindow() {
     ApplyTheme(g_settings.dark);
     M.explorer = Explorer::Create(h);
     M.scm = Scm::Create(h);
+    M.search = Search::Create(h);
     M.findBar = FindBar::Create(h);
     M.output = CreateWindowExW(0, L"EDIT", L"", WS_CHILD | WS_VSCROLL | ES_MULTILINE | ES_READONLY | ES_AUTOVSCROLL | ES_NOHIDESEL,
                                0, 0, 0, 0, h, nullptr, g_hinst, nullptr);

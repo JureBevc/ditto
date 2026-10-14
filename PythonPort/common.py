@@ -133,7 +133,7 @@ class Settings:
     def __init__(self):
         self.fontName = "Consolas"
         self.fontSize = 11
-        self.dark = False
+        self.dark = True
         self.wrap = False
         self.tabSize = 4
         self.sidebarWidth = 260
@@ -197,7 +197,7 @@ def LoadSettings():
     s = g_settings
     s.fontName = _IniStr("FontName", "Consolas")
     s.fontSize = max(6, min(72, _IniInt("FontSize", 11)))
-    s.dark = _IniInt("Dark", 0) != 0
+    s.dark = _IniInt("Dark", 1) != 0
     s.wrap = _IniInt("WordWrap", 0) != 0
     s.tabSize = max(1, min(16, _IniInt("TabSize", 4)))
     s.sidebarWidth = max(120, min(1200, _IniInt("SidebarWidth", 260)))

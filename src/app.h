@@ -56,6 +56,14 @@ void Refresh();
 void ThemeChanged();
 }
 
+// search_panel.cpp
+namespace Search {
+HWND Create(HWND parent);
+void Focus(const std::wstring& seed);  // focus the query box; a non-empty seed replaces the query and searches
+void SetRoot(const std::wstring& folder);
+void ThemeChanged();
+}
+
 // diff_view.cpp
 namespace DiffView {
 void Register();

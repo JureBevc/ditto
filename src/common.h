@@ -61,7 +61,7 @@ void ApplyTheme(bool dark);
 struct Settings {
     std::wstring fontName = L"Consolas";
     int fontSize = 11;
-    bool dark = false;
+    bool dark = true;
     bool wrap = false;
     int tabSize = 4;
     int sidebarWidth = 260;

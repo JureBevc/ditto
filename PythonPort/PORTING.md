@@ -13,6 +13,7 @@ It uses only the Python standard library + `ctypes` calling Win32 directly. Run 
 | app.h | `app.py` (done): `DiffSpec`, `App::X` → `app.X(...)` (forwards to `main_window.App_X`) |
 | app.h `Scm::`, scm_panel.cpp | `scm_panel.py` |
 | app.h `Explorer::`, explorer.cpp | `explorer.py` |
+| app.h `Search::`, search_panel.cpp | `search_panel.py` |
 | app.h `DiffView::`, diff_view.cpp | `diff_view.py` |
 | app.h `LogView::`, log_view.cpp | `log_view.py` |
 | app.h git_commands decls, git_commands.cpp | `git_commands.py` |

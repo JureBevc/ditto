@@ -40,6 +40,7 @@ HMENU BuildMenu() {
     AppendMenuW(e, MF_STRING, ID_FIND_REPLACE, L"R&eplace...\tCtrl+H");
     AppendMenuW(e, MF_STRING, ID_FIND_NEXT, L"Find &Next\tF3");
     AppendMenuW(e, MF_STRING, ID_FIND_PREV, L"Find Pre&vious\tShift+F3");
+    AppendMenuW(e, MF_STRING, ID_VIEW_SEARCH, L"Find in Fi&les...\tCtrl+Shift+F");
     AppendMenuW(e, MF_SEPARATOR, 0, nullptr);
     AppendMenuW(e, MF_STRING, ID_EDIT_GOTO, L"&Go to Line...\tCtrl+G");
     AppendMenuW(bar, MF_POPUP, (UINT_PTR)e, L"&Edit");
@@ -50,6 +51,7 @@ HMENU BuildMenu() {
     AppendMenuW(v, MF_STRING, ID_PALETTE_FILES, L"&Go to File...\tCtrl+P");
     AppendMenuW(v, MF_SEPARATOR, 0, nullptr);
     AppendMenuW(v, MF_STRING, ID_VIEW_EXPLORER, L"&Explorer\tCtrl+Shift+E");
+    AppendMenuW(v, MF_STRING, ID_VIEW_SEARCH, L"Searc&h\tCtrl+Shift+F");
     AppendMenuW(v, MF_STRING, ID_VIEW_SCM, L"&Source Control\tCtrl+Shift+G");
     AppendMenuW(v, MF_STRING, ID_VIEW_SIDEBAR, L"Show Side &Bar\tCtrl+B");
     AppendMenuW(v, MF_STRING, ID_VIEW_OUTPUT, L"Show &Output\tCtrl+Shift+U");
@@ -131,6 +133,7 @@ HACCEL BuildAccel() {
         {FCONTROL | FVIRTKEY, 'W', ID_FILE_CLOSETAB},
         {FCONTROL | FVIRTKEY, VK_F4, ID_FILE_CLOSETAB},
         {FCONTROL | FVIRTKEY, 'F', ID_FIND_SHOW},
+        {FCONTROL | FSHIFT | FVIRTKEY, 'F', ID_VIEW_SEARCH},
         {FCONTROL | FVIRTKEY, 'H', ID_FIND_REPLACE},
         {FVIRTKEY, VK_F3, ID_FIND_NEXT},
         {FSHIFT | FVIRTKEY, VK_F3, ID_FIND_PREV},
@@ -317,6 +320,7 @@ void OnCommand(int id) {
         M.folder.clear();
         M.status = GitStatus();
         Explorer::SetRoot(L"");
+        Search::SetRoot(L"");
         Scm::Update(M.status);
         UpdateTitle();
         InvalidateRect(M.hwnd, nullptr, FALSE);
@@ -366,6 +370,12 @@ void OnCommand(int id) {
         else SetFocus(M.explorer);
         break;
     }
+    case ID_VIEW_SEARCH:
+        M.sidebarMode = 2;
+        g_settings.showSidebar = true;
+        Layout();
+        Search::Focus(ed ? Utf8ToWide(ed->SelectionForFind()) : L"");
+        break;
     case ID_VIEW_SIDEBAR:
         g_settings.showSidebar = !g_settings.showSidebar;
         Layout();
