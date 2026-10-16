@@ -3,10 +3,12 @@
 # Ctrl+R shows the same popup as a recent-folder picker.
 # (port of palette.cpp, Palette:: in main_window.h)
 import bisect
+import collections
 import os
 import re
 import stat
 import threading
+import time
 
 import common as C
 import win32 as W
@@ -122,12 +124,13 @@ g_inputBrush = None
 g_hiding = False
 g_recentMode = False  # listing recent folders instead of files/commands
 
-# file index for quick open (filled by a background thread; immutable once published, so matcher threads can share it)
-class FileIndex:
-    def __init__(self, root="", files=None, lower=None):
-        self.root = root
-        self.files = files or []  # paths relative to root
-        self.lower = lower or []  # LowerW of files
+# file index for quick open, filled breadth-first by a background thread that publishes snapshots as it goes, so files
+# near the root are searchable at once even in huge folders. Snapshots are immutable and share their chunks, so matcher
+# threads can use them while the scan carries on.
+class FileChunk:
+    def __init__(self, files, lower):
+        self.files = files  # paths relative to root
+        self.lower = lower  # LowerW of files
         # all lower paths joined by newlines + their start offsets: lets one regex pass find the candidates
         self.blob = "\n".join(self.lower)
         self.starts = []
@@ -137,9 +140,18 @@ class FileIndex:
             pos += len(f) + 1
 
 
+class FileIndex:
+    def __init__(self, root="", chunks=None, count=0):
+        self.root = root
+        self.chunks = chunks or []  # in scan order (shallowest first)
+        self.count = count
+
+
 g_index = FileIndex()
 g_filesRoot = ""
 g_filesLoading = False
+g_indexComplete = False  # g_index holds a finished scan of g_filesRoot (a rescan then replaces it only when done)
+kPublishMs = 150  # how often a running scan publishes what it has found so far
 g_filesGen = 0
 g_matchGen = 0  # bumped by every Refresh; stale background matches are dropped
 kSyncMatchLimit = 20000  # larger indexes are matched on a background thread
@@ -219,7 +231,7 @@ def _SortKey(s):
 
 
 def StartFileScan():
-    global g_index, g_filesRoot, g_filesLoading, g_filesGen
+    global g_index, g_filesRoot, g_filesLoading, g_filesGen, g_indexComplete
     root = MW.M.folder
     if not root:
         return
@@ -227,18 +239,45 @@ def StartFileScan():
         return
     if root != g_filesRoot:
         g_index = FileIndex()
+        g_indexComplete = False
     g_filesRoot = root
     g_filesLoading = True
     g_filesGen += 1
     gen = g_filesGen
+    partial = not g_indexComplete
 
     def worker():
+        chunks = []
+        count = 0
         files = []
-        stack = [""]
-        while stack and len(files) < 500000:
+
+        def publish(finished):
+            nonlocal count, files
+            if files:
+                count += len(files)
+                chunks.append(FileChunk(files, [C.LowerW(f) for f in files]))
+                files = []
+            index = FileIndex(root, list(chunks), count)
+
+            def done():
+                global g_index, g_filesRoot, g_filesLoading, g_indexComplete
+                if gen != g_filesGen:
+                    return
+                g_index = index
+                g_filesRoot = root
+                if finished:
+                    g_filesLoading = False
+                    g_indexComplete = True
+                if g_pop and IsWindowVisible(g_pop):
+                    Refresh()
+            C.RunOnUi(done)
+
+        lastPublish = time.monotonic()
+        queue = collections.deque([""])  # breadth-first: every file at depth N is found before any at depth N+1
+        while queue and count + len(files) < 500000:
             if g_filesGen != gen:
                 return
-            rel = stack.pop()
+            rel = queue.popleft()
             try:
                 it = os.scandir(C.JoinPath(root, rel) if rel else root)
             except OSError:
@@ -256,22 +295,13 @@ def StartFileScan():
                     if attrs & stat.FILE_ATTRIBUTE_DIRECTORY:
                         if name == ".git" or name == "node_modules" or (attrs & stat.FILE_ATTRIBUTE_REPARSE_POINT):
                             continue
-                        stack.append(r)
+                        queue.append(r)
                     elif ".~mye-" not in name:
                         files.append(r)
-        files.sort(key=_SortKey)
-        index = FileIndex(root, files, [C.LowerW(f) for f in files])
-
-        def done():
-            global g_index, g_filesRoot, g_filesLoading
-            if gen != g_filesGen:
-                return
-            g_index = index
-            g_filesRoot = root
-            g_filesLoading = False
-            if g_pop and IsWindowVisible(g_pop):
-                Refresh()
-        C.RunOnUi(done)
+            if partial and (time.monotonic() - lastPublish) * 1000 >= kPublishMs:
+                publish(False)
+                lastPublish = time.monotonic()
+        publish(True)
 
     threading.Thread(target=worker, daemon=True).start()
 
@@ -478,39 +508,45 @@ def ScoreFile(rel, lower, q, pos):
     return sc - min(len(rel), 60) // 12  # shorter paths first
 
 
-def _Candidates(ix, q):
-    """Indexes of the paths that contain q as a subsequence (all Fuzzy can match), found by one regex pass.
+def _Candidates(ch, q):
+    """Indexes of the chunk's paths that contain q as a subsequence (all Fuzzy can match), found by one regex pass.
     Atomic groups take the first occurrence of each character, so the scan stays linear."""
     pat = re.compile("^" + "".join("(?>[^\n]*?" + re.escape(c) + ")" for c in q), re.M)
-    starts = ix.starts
-    for mt in pat.finditer(ix.blob):
+    starts = ch.starts
+    for mt in pat.finditer(ch.blob):
         yield bisect.bisect_right(starts, mt.start()) - 1
 
 
 def MatchFiles(ix, q, gen):
     """Best 200 matches. Safe on any thread; gen != 0 => gives up (returns None) once g_matchGen moves on."""
-    hits = []
-    files, lowers = ix.files, ix.lower
+    hits = []  # (score, index across all chunks: ties go to the file found first, i.e. the shallowest, chunk, j)
+    base = 0
     if not q:
-        for i in range(min(len(files), 200)):
-            hits.append((ScoreFile(files[i], lowers[i], q, None), i))
+        for ch in ix.chunks:
+            for j in range(min(len(ch.files), 200 - len(hits))):
+                hits.append((ScoreFile(ch.files[j], ch.lower[j], q, None), base + j, ch, j))
+            base += len(ch.files)
+            if len(hits) >= 200:
+                break
     else:
         n = 0
-        for i in _Candidates(ix, q):
-            n += 1
-            if gen and (n & 1023) == 0 and g_matchGen != gen:
-                return None
-            sc = ScoreFile(files[i], lowers[i], q, None)
-            if sc is not None:
-                hits.append((sc, i))
+        for ch in ix.chunks:
+            for j in _Candidates(ch, q):
+                n += 1
+                if gen and (n & 1023) == 0 and g_matchGen != gen:
+                    return None
+                sc = ScoreFile(ch.files[j], ch.lower[j], q, None)
+                if sc is not None:
+                    hits.append((sc, base + j, ch, j))
+            base += len(ch.files)
         hits.sort(key=lambda h: (-h[0], h[1]))
         del hits[200:]
     res = []
-    for sc, i in hits:
-        rel = files[i]
+    for sc, _, ch, j in hits:
+        rel = ch.files[j]
         fn = rel.rfind("\\") + 1
         pos = []
-        ScoreFile(rel, lowers[i], q, pos)
+        ScoreFile(rel, ch.lower[j], q, pos)
         it = Item(K_FILE)
         it.label = rel[fn:]
         it.detail = rel[:fn - 1] if fn else ""
@@ -706,7 +742,7 @@ def Refresh():
             it.cmd = R.ID_FILE_OPENFOLDER
             g_items.append(it)
             AddFileStatus(not raw)
-        elif not q or len(g_index.files) <= kSyncMatchLimit:
+        elif not q or g_index.count <= kSyncMatchLimit:
             g_items = MatchFiles(g_index, q, 0)
             AddFileStatus(not raw)
         else:

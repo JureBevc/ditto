@@ -4,6 +4,8 @@
 #include "main_window.h"
 #include "resource.h"
 
+#include <deque>
+
 namespace {
 
 struct Cmd {
@@ -98,15 +100,23 @@ HBRUSH g_inputBrush;
 bool g_hiding = false;
 bool g_recentMode = false;  // listing recent folders instead of files/commands
 
-// file index for quick open (filled by a background thread; immutable once published, so matcher threads can share it)
-struct FileIndex {
-    std::wstring root;
+// file index for quick open, filled breadth-first by a background thread that publishes snapshots as it goes, so files
+// near the root are searchable at once even in huge folders. Snapshots are immutable and share their chunks, so matcher
+// threads can use them while the scan carries on.
+struct FileChunk {
     std::vector<std::wstring> files;  // paths relative to root
     std::vector<std::wstring> lower;  // LowerW of files
+};
+struct FileIndex {
+    std::wstring root;
+    std::vector<std::shared_ptr<const FileChunk>> chunks;  // in scan order (shallowest first)
+    size_t count = 0;
 };
 std::shared_ptr<const FileIndex> g_index = std::make_shared<FileIndex>();
 std::wstring g_filesRoot;
 bool g_filesLoading = false;
+bool g_indexComplete = false;  // g_index holds a finished scan of g_filesRoot (a rescan then replaces it only when done)
+const ULONGLONG kPublishMs = 150;  // how often a running scan publishes what it has found so far
 std::atomic<uint64_t> g_filesGen{0};
 std::atomic<uint64_t> g_matchGen{0};  // bumped by every Refresh; stale background matches are dropped
 const size_t kSyncMatchLimit = 20000;  // larger indexes are matched on a background thread
@@ -168,19 +178,45 @@ void StartFileScan() {
     std::wstring root = M.folder;
     if (root.empty()) return;
     if (g_filesLoading && root == g_filesRoot) return;
-    if (root != g_filesRoot) g_index = std::make_shared<FileIndex>();
+    if (root != g_filesRoot) {
+        g_index = std::make_shared<FileIndex>();
+        g_indexComplete = false;
+    }
     g_filesRoot = root;
     g_filesLoading = true;
     uint64_t gen = ++g_filesGen;
-    std::thread([root, gen]() {
-        auto index = std::make_shared<FileIndex>();
-        index->root = root;
-        std::vector<std::wstring>* files = &index->files;
-        std::vector<std::wstring> stack = {L""};
-        while (!stack.empty() && files->size() < 500000) {
+    bool partial = !g_indexComplete;
+    std::thread([root, gen, partial]() {
+        std::vector<std::shared_ptr<const FileChunk>> chunks;
+        size_t count = 0;
+        auto cur = std::make_shared<FileChunk>();
+        auto publish = [&](bool done) {
+            if (!cur->files.empty()) {
+                count += cur->files.size();
+                chunks.push_back(cur);
+                cur = std::make_shared<FileChunk>();
+            }
+            auto index = std::make_shared<FileIndex>();
+            index->root = root;
+            index->chunks = chunks;
+            index->count = count;
+            RunOnUi([index, gen, root, done]() {
+                if (gen != g_filesGen) return;
+                g_index = index;
+                g_filesRoot = root;
+                if (done) {
+                    g_filesLoading = false;
+                    g_indexComplete = true;
+                }
+                if (g_pop && IsWindowVisible(g_pop)) Palette::Refresh();
+            });
+        };
+        ULONGLONG lastPublish = GetTickCount64();
+        std::deque<std::wstring> queue = {L""};  // breadth-first: every file at depth N is found before any at depth N+1
+        while (!queue.empty() && count + cur->files.size() < 500000) {
             if (g_filesGen != gen) return;
-            std::wstring rel = stack.back();
-            stack.pop_back();
+            std::wstring rel = std::move(queue.front());
+            queue.pop_front();
             WIN32_FIND_DATAW fd;
             HANDLE h = FindFirstFileExW(JoinPath(JoinPath(root, rel), L"*").c_str(), FindExInfoBasic, &fd, FindExSearchNameMatch,
                                         nullptr, FIND_FIRST_EX_LARGE_FETCH);
@@ -191,25 +227,19 @@ void StartFileScan() {
                 std::wstring r = rel.empty() ? name : rel + L"\\" + name;
                 if (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) {
                     if (name == L".git" || name == L"node_modules" || (fd.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT)) continue;
-                    stack.push_back(r);
+                    queue.push_back(std::move(r));
                 } else if (name.find(L".~mye-") == std::wstring::npos) {
-                    files->push_back(r);
+                    cur->lower.push_back(LowerW(r));
+                    cur->files.push_back(std::move(r));
                 }
             } while (FindNextFileW(h, &fd));
             FindClose(h);
+            if (partial && GetTickCount64() - lastPublish >= kPublishMs) {
+                publish(false);
+                lastPublish = GetTickCount64();
+            }
         }
-        std::sort(files->begin(), files->end(), [](const std::wstring& a, const std::wstring& b) {
-            return CompareStringOrdinal(a.c_str(), -1, b.c_str(), -1, TRUE) == CSTR_LESS_THAN;
-        });
-        index->lower.reserve(files->size());
-        for (const auto& f : *files) index->lower.push_back(LowerW(f));
-        RunOnUi([index, gen, root]() {
-            if (gen != g_filesGen) return;
-            g_index = index;
-            g_filesRoot = root;
-            g_filesLoading = false;
-            if (g_pop && IsWindowVisible(g_pop)) Palette::Refresh();
-        });
+        publish(true);
     }).detach();
 }
 
@@ -414,13 +444,17 @@ bool ScoreFile(const std::wstring& rel, const std::wstring& lower, const std::ws
 
 // Best 200 matches. Safe on any thread; gen != 0 => gives up (returns nothing) once g_matchGen moves on.
 std::vector<Item> MatchFiles(const FileIndex& ix, const std::wstring& q, uint64_t gen) {
-    struct Hit { int score; size_t idx; };
+    struct Hit { int score; size_t idx; const FileChunk* ch; size_t j; };
     std::vector<Hit> hits;
-    for (size_t i = 0; i < ix.files.size(); ++i) {
-        if (gen && (i & 1023) == 0 && g_matchGen != gen) return {};
-        int sc;
-        if (!ScoreFile(ix.files[i], ix.lower[i], q, &sc, nullptr)) continue;
-        hits.push_back({sc, i});
+    size_t i = 0;  // index across all chunks: ties go to the file found first, i.e. the shallowest
+    for (const auto& ch : ix.chunks) {
+        for (size_t j = 0; j < ch->files.size(); ++j, ++i) {
+            if (gen && (i & 1023) == 0 && g_matchGen != gen) return {};
+            int sc;
+            if (!ScoreFile(ch->files[j], ch->lower[j], q, &sc, nullptr)) continue;
+            hits.push_back({sc, i, ch.get(), j});
+            if (q.empty() && hits.size() >= 200) break;
+        }
         if (q.empty() && hits.size() >= 200) break;
     }
     if (!q.empty()) {
@@ -432,12 +466,12 @@ std::vector<Item> MatchFiles(const FileIndex& ix, const std::wstring& q, uint64_
     std::vector<Item> res;
     res.reserve(hits.size());
     for (const Hit& h : hits) {
-        const std::wstring& rel = ix.files[h.idx];
+        const std::wstring& rel = h.ch->files[h.j];
         size_t sl = rel.find_last_of(L'\\');
         size_t fn = sl == std::wstring::npos ? 0 : sl + 1;
         std::vector<int> pos;
         int sc;
-        ScoreFile(rel, ix.lower[h.idx], q, &sc, &pos);
+        ScoreFile(rel, h.ch->lower[h.j], q, &sc, &pos);
         Item it;
         it.kind = K_FILE;
         it.label = rel.substr(fn);
@@ -601,7 +635,7 @@ void Refresh() {
             it.cmd = ID_FILE_OPENFOLDER;
             g_items.push_back(it);
             AddFileStatus(raw.empty());
-        } else if (q.empty() || g_index->files.size() <= kSyncMatchLimit) {
+        } else if (q.empty() || g_index->count <= kSyncMatchLimit) {
             g_items = MatchFiles(*g_index, q, 0);
             AddFileStatus(raw.empty());
         } else {
