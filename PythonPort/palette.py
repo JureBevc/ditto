@@ -4,11 +4,13 @@
 # (port of palette.cpp, Palette:: in main_window.h)
 import bisect
 import collections
+import heapq
+import itertools
 import os
-import re
 import stat
 import threading
 import time
+from array import array
 
 import common as C
 import win32 as W
@@ -127,17 +129,21 @@ g_recentMode = False  # listing recent folders instead of files/commands
 # file index for quick open, filled breadth-first by a background thread that publishes snapshots as it goes, so files
 # near the root are searchable at once even in huge folders. Snapshots are immutable and share their chunks, so matcher
 # threads can use them while the scan carries on.
+_charBit = {c: 1 << i for i, c in enumerate("abcdefghijklmnopqrstuvwxyz0123456789._- ")}
+
+
+def _CharMask(s):
+    """Bit set of the common characters in s (others are not tracked, so they never rule a file out)."""
+    return sum(map(_charBit.get, set(s), itertools.repeat(0)))
+
+
 class FileChunk:
-    def __init__(self, files, lower):
+    def __init__(self, files):
         self.files = files  # paths relative to root
-        self.lower = lower  # LowerW of files
-        # all lower paths joined by newlines + their start offsets: lets one regex pass find the candidates
-        self.blob = "\n".join(self.lower)
-        self.starts = []
-        pos = 0
-        for f in self.lower:
-            self.starts.append(pos)
-            pos += len(f) + 1
+        # lowered in one CharLowerBuffW call (the mapping is per character, so it splits back exactly)
+        self.lower = C.LowerW("\n".join(files)).split("\n")  # LowerW of files
+        # which characters each path contains: one integer test rules out most files before any scoring
+        self.masks = [_CharMask(f) for f in self.lower]
 
 
 class FileIndex:
@@ -153,8 +159,8 @@ g_filesLoading = False
 g_indexComplete = False  # g_index holds a finished scan of g_filesRoot (a rescan then replaces it only when done)
 kPublishMs = 150  # how often a running scan publishes what it has found so far
 g_filesGen = 0
-g_matchGen = 0  # bumped by every Refresh; stale background matches are dropped
-kSyncMatchLimit = 20000  # larger indexes are matched on a background thread
+g_matchQ = None  # query the latest Refresh wants background-matched (None: none); other matches give up
+kSyncMatchLimit = 5000  # larger indexes are matched on a background thread (scoring costs ~4us a file here)
 
 kMaxRows = 14
 _big = None  # static HFONT big in Palette::Show
@@ -175,9 +181,12 @@ def IsSep(c):
     return c in _SEPS
 
 
+kNoMatch = -(1 << 31)
+
+
 def Fuzzy(candLower, q, pos):
-    """Fuzzy subsequence match (case-insensitive). Returns -1 if no match; pos (list or None) receives matched
-    indexes."""
+    """Fuzzy subsequence match (case-insensitive). Returns kNoMatch if no match (real scores can be negative, e.g. a
+    lone character deep in a long path); pos (list or None) receives matched indexes."""
     if not q:
         return 0
     score = 0
@@ -199,7 +208,7 @@ def Fuzzy(candLower, q, pos):
                 break  # keep contiguous runs
             k = find(qc, k + 1)
         if found < 0:
-            return -1
+            return kNoMatch
         k = found
         if found != prev + 1 and wordStart >= 0:
             k = wordStart
@@ -255,7 +264,7 @@ def StartFileScan():
             nonlocal count, files
             if files:
                 count += len(files)
-                chunks.append(FileChunk(files, [C.LowerW(f) for f in files]))
+                chunks.append(FileChunk(files))
                 files = []
             index = FileIndex(root, list(chunks), count)
 
@@ -495,7 +504,7 @@ def ScoreFile(rel, lower, q, pos):
     fn = rel.rfind("\\") + 1
     fpos = [] if pos is not None else None
     sc = Fuzzy(lower[fn:], q, fpos)
-    if sc >= 0:
+    if sc != kNoMatch:
         sc += 20
         if pos is not None:
             pos.extend(p + fn for p in fpos)
@@ -503,44 +512,157 @@ def ScoreFile(rel, lower, q, pos):
         if pos is not None:
             del pos[:]
         sc = Fuzzy(lower, q, pos)
-        if sc < 0:
+        if sc == kNoMatch:
             return None
     return sc - min(len(rel), 60) // 12  # shorter paths first
 
 
-def _Candidates(ch, q):
-    """Indexes of the chunk's paths that contain q as a subsequence (all Fuzzy can match), found by one regex pass.
-    Atomic groups take the first occurrence of each character, so the scan stays linear."""
-    pat = re.compile("^" + "".join("(?>[^\n]*?" + re.escape(c) + ")" for c in q), re.M)
-    starts = ch.starts
-    for mt in pat.finditer(ch.blob):
-        yield bisect.bisect_right(starts, mt.start()) - 1
+class _Matched:
+    """What a search for q found in the first len(chunks) chunks of an index: the scored matches, and the files whose
+    name doesn't match but whose path might (left unscored while they couldn't make the top 200). A later search for q
+    plus more characters, or for q over the same index grown by more chunks, starts from these instead of the index."""
+    def __init__(self, root, chunks, q, gis, scs, pend):
+        self.root = root
+        self.chunks = chunks
+        self.q = q
+        self.gis = gis  # array: index across all chunks
+        self.scs = scs  # array: score of each
+        self.pend = pend  # array: indexes of the unscored path-only candidates
 
 
-def MatchFiles(ix, q, gen):
-    """Best 200 matches. Safe on any thread; gen != 0 => gives up (returns None) once g_matchGen moves on."""
+_matched = []  # _Matched for prefixes of the latest query, shortest first; replaced whole, so threads can share it
+
+
+def _FindMatched(ix, q):
+    for m in reversed(_matched):
+        if m.root == ix.root and q.startswith(m.q) and len(m.chunks) <= len(ix.chunks) and \
+                all(a is b for a, b in zip(m.chunks, ix.chunks)):
+            return m
+    return None
+
+
+def _RememberMatched(m):
+    global _matched
+    keep = [o for o in _matched if o.root == m.root and m.q.startswith(o.q) and o.q != m.q]
+    keep.sort(key=lambda o: len(o.q))
+    _matched = keep[-15:] + [m]
+
+
+def _PathOnlyBound(q):
+    """The most a match outside the file name can score: per Fuzzy, a character earns at most 9 (word start), or 15
+    when it also continues a run, which needs the previous query character to be a separator."""
+    return 9 + sum(15 if c in _SEPS else 9 for c in q[:-1])
+
+
+def _Best(chunks, bases, gis, scs):
+    """The 200 best (score, index, chunk, j) of the matched files, ties to the lower index."""
+    top = range(len(scs))
+    if len(scs) > 200:  # only what reaches the 200th best score needs sorting
+        t = heapq.nlargest(200, scs)[-1]
+        top = [k for k in top if scs[k] >= t]
+    best = sorted(((scs[k], gis[k]) for k in top), key=lambda h: (-h[0], h[1]))[:200]
+    hits = []
+    for sc, gi in best:
+        ci = bisect.bisect_right(bases, gi) - 1
+        hits.append((sc, gi, chunks[ci], gi - bases[ci]))
+    return hits
+
+
+kProgressSecs = 0.25  # a long match shows its best results so far this often (shallow files are scored first)
+
+
+def MatchFiles(ix, q, stale, progress=None):
+    """Best 200 matches, the same as scoring every file with ScoreFile. Safe on any thread; gives up (returns None) once
+    stale() says the result is no longer wanted, and passes interim results to progress() while a long match runs.
+    Fast on huge indexes: a character mask rules most files out, files that can't match an earlier prefix of q are
+    never looked at again, and paths are only scored when their file name doesn't match and they could still make the
+    top 200."""
     hits = []  # (score, index across all chunks: ties go to the file found first, i.e. the shallowest, chunk, j)
-    base = 0
+    chunks = ix.chunks
     if not q:
-        for ch in ix.chunks:
+        base = 0
+        for ch in chunks:
             for j in range(min(len(ch.files), 200 - len(hits))):
                 hits.append((ScoreFile(ch.files[j], ch.lower[j], q, None), base + j, ch, j))
             base += len(ch.files)
             if len(hits) >= 200:
                 break
-    else:
-        n = 0
-        for ch in ix.chunks:
-            for j in _Candidates(ch, q):
+        return _Items(ix, q, hits)
+    bases = list(itertools.accumulate((len(ch.files) for ch in chunks), initial=0))  # index of each chunk's first
+    gis, scs = array("l"), array("l")
+    pend = array("l")  # candidates whose file name doesn't match q
+    nextProgress = time.monotonic() + kProgressSecs
+
+    def check():  # every 1024 files: False to give up
+        nonlocal nextProgress
+        if stale and stale():
+            return False
+        if progress and time.monotonic() >= nextProgress:
+            progress(_Items(ix, q, _Best(chunks, bases, gis, scs)))
+            nextProgress = time.monotonic() + kProgressSecs
+        return True
+
+    def consider(gi, rel, lower):  # ScoreFile's file name half; the rest waits in pend
+        fn = rel.rfind("\\") + 1
+        sc = Fuzzy(lower[fn:], q, None)
+        if sc == kNoMatch:
+            pend.append(gi)
+        else:
+            gis.append(gi)
+            scs.append(sc + 20 - min(len(rel), 60) // 12)
+
+    need = _CharMask(q)
+    start = 0
+    n = 0
+    m = _FindMatched(ix, q)
+    if m:
+        start = len(m.chunks)
+        if m.q == q:
+            gis, scs, pend = array("l", m.gis), array("l", m.scs), array("l", m.pend)
+        else:
+            for gi in m.gis:
                 n += 1
-                if gen and (n & 1023) == 0 and g_matchGen != gen:
+                if (n & 1023) == 0 and not check():
                     return None
-                sc = ScoreFile(ch.files[j], ch.lower[j], q, None)
-                if sc is not None:
-                    hits.append((sc, base + j, ch, j))
-            base += len(ch.files)
-        hits.sort(key=lambda h: (-h[0], h[1]))
-        del hits[200:]
+                ci = bisect.bisect_right(bases, gi) - 1
+                ch = chunks[ci]
+                j = gi - bases[ci]
+                if ch.masks[j] & need == need:
+                    consider(gi, ch.files[j], ch.lower[j])
+            # a name that doesn't match a prefix of q doesn't match q either
+            for gi in m.pend:
+                ci = bisect.bisect_right(bases, gi) - 1
+                if chunks[ci].masks[gi - bases[ci]] & need == need:
+                    pend.append(gi)
+    for ci in range(start, len(chunks)):
+        ch = chunks[ci]
+        base = bases[ci]
+        files, lowers = ch.files, ch.lower
+        for j in [j for j, mk in enumerate(ch.masks) if mk & need == need]:
+            n += 1
+            if (n & 1023) == 0 and not check():
+                return None
+            consider(base + j, files[j], lowers[j])
+    # path-only matches can't beat 200 file name matches scoring above their bound (nor tie them): leave them unscored
+    bound = _PathOnlyBound(q)
+    if pend and sum(map(bound.__lt__, scs)) < 200:
+        for gi in pend:
+            n += 1
+            if (n & 1023) == 0 and not check():
+                return None
+            ci = bisect.bisect_right(bases, gi) - 1
+            ch = chunks[ci]
+            j = gi - bases[ci]
+            sc = Fuzzy(ch.lower[j], q, None)
+            if sc != kNoMatch:
+                gis.append(gi)
+                scs.append(sc - min(len(ch.files[j]), 60) // 12)
+        pend = array("l")
+    _RememberMatched(_Matched(ix.root, chunks, q, gis, scs, pend))
+    return _Items(ix, q, _Best(chunks, bases, gis, scs))
+
+
+def _Items(ix, q, hits):
     res = []
     for sc, _, ch, j in hits:
         rel = ch.files[j]
@@ -568,6 +690,42 @@ def AddFileStatus(rawEmpty):
         hint = Item(K_INFO, "Type > to run a command, : to go to a line")
         hint.cmd = 0
         g_items.insert(0, hint)
+
+
+_matchBusy = False  # a background match is running; a request meanwhile waits in _matchNext (only the latest)
+_matchNext = None
+
+
+def _StartMatch(ix, q):
+    """Matches on a worker thread. One at a time, so a scan publishing a bigger index doesn't restart a long match: the
+    next run only has the new chunks left to do."""
+    global _matchBusy, _matchNext
+    if _matchBusy:
+        _matchNext = (ix, q)
+        return
+    _matchBusy = True
+
+    def show(res):
+        global g_items
+        if q == g_matchQ and g_pop and IsWindowVisible(g_pop):
+            g_items = res
+            AddFileStatus(False)
+            SelectFirst()
+
+    def worker():
+        res = MatchFiles(ix, q, lambda: g_matchQ != q, lambda part: C.RunOnUi(lambda: show(part)))
+
+        def done():
+            global _matchBusy, _matchNext
+            _matchBusy = False
+            if res is not None:
+                show(res)
+            nxt, _matchNext = _matchNext, None
+            if nxt and nxt[1] == g_matchQ:
+                _StartMatch(*nxt)
+        C.RunOnUi(done)
+
+    threading.Thread(target=worker, daemon=True).start()
 
 
 def SelectFirst():
@@ -664,10 +822,9 @@ def _byScoreDesc(items):
 
 
 def Refresh():
-    global g_items, g_matchGen
+    global g_items, g_matchQ
     raw = Query()
-    g_matchGen += 1
-    gen = g_matchGen
+    g_matchQ = None
     prev = g_items
     g_items = []
     if g_recentMode:
@@ -681,11 +838,11 @@ def Refresh():
             if C.PathEqualsI(r[i], MW.M.folder):
                 it.key = "current"
             it.score = Fuzzy(C.LowerW(it.label), q, it.hlLabel)  # prefer matches in the folder name
-            if it.score >= 0:
+            if it.score != kNoMatch:
                 it.score += 20
             else:
                 it.score = Fuzzy(C.LowerW(it.detail), q, it.hlDetail)
-            if it.score >= 0:
+            if it.score != kNoMatch:
                 g_items.append(it)
         if q:
             _byScoreDesc(g_items)
@@ -703,7 +860,7 @@ def Refresh():
             it.key = c.key
             it.cmd = c.id
             it.score = Fuzzy(C.LowerW(it.label), q, it.hlLabel)
-            if it.score >= 0:
+            if it.score != kNoMatch:
                 g_items.append(it)
         rf = C.g_settings.recentFolders
         for i in range(len(rf)):
@@ -712,7 +869,7 @@ def Refresh():
             it.detail = rf[i]
             it.cmd = R.ID_FILE_RECENT0 + i
             it.score = Fuzzy(C.LowerW(it.label), q, it.hlLabel)
-            if it.score >= 0:
+            if it.score != kNoMatch:
                 g_items.append(it)
         if q:
             _byScoreDesc(g_items)
@@ -743,27 +900,12 @@ def Refresh():
             g_items.append(it)
             AddFileStatus(not raw)
         elif not q or g_index.count <= kSyncMatchLimit:
-            g_items = MatchFiles(g_index, q, 0)
+            g_items = MatchFiles(g_index, q, None)
             AddFileStatus(not raw)
         else:
             # big folder: match on a worker thread so typing never blocks; keep the previous file results meanwhile
-            ix = g_index
-
-            def worker():
-                res = MatchFiles(ix, q, gen)
-                if res is None or g_matchGen != gen:
-                    return
-
-                def done():
-                    global g_items
-                    if gen != g_matchGen or not g_pop or not IsWindowVisible(g_pop):
-                        return
-                    g_items = res
-                    AddFileStatus(False)
-                    SelectFirst()
-                C.RunOnUi(done)
-
-            threading.Thread(target=worker, daemon=True).start()
+            g_matchQ = q
+            _StartMatch(g_index, q)
             g_items = [it for it in prev if it.kind == K_FILE]
             if not g_items:
                 g_items.append(Item(K_INFO, "Searching files..."))

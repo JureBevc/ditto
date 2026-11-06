@@ -76,6 +76,10 @@ def _load_icons():
 
 
 def main():
+    # Background threads (file scan, quick-open matching, search) hold the GIL in pure-Python loops; every ctypes call
+    # the UI thread makes releases it and must win it back, which at the default 5 ms switch interval makes painting
+    # and typing crawl while they run. A short interval keeps the UI thread responsive.
+    sys.setswitchinterval(0.0005)
     C.g_hinst = GetModuleHandleW(None)
     show = SW_SHOWDEFAULT
     SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2)

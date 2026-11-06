@@ -1409,11 +1409,9 @@ def key_down(vk):
 
 def wstr_len(s):
     """Length of a Python str in UTF-16 code units (what Win32 counts expect)."""
-    n = len(s)
-    for ch in s:
-        if ord(ch) > 0xFFFF:
-            n += 1
-    return n
+    if s.isascii():
+        return len(s)
+    return len(s.encode("utf-16-le", "surrogatepass")) // 2  # lone surrogates count as one unit, as in UTF-16
 
 
 def draw_text(dc, s, rc, flags):

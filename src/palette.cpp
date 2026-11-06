@@ -4,6 +4,7 @@
 #include "main_window.h"
 #include "resource.h"
 
+#include <climits>
 #include <deque>
 
 namespace {
@@ -127,7 +128,9 @@ int RowH() { return S(26); }
 
 bool IsSep(wchar_t c) { return c == L' ' || c == L'/' || c == L'\\' || c == L':' || c == L'.' || c == L'-' || c == L'_'; }
 
-// Fuzzy subsequence match (case-insensitive). Returns -1 if no match; positions receive matched indexes.
+// Fuzzy subsequence match (case-insensitive). Returns kNoMatch if no match (real scores can be negative, e.g. a lone
+// character deep in a long path); positions receive matched indexes.
+const int kNoMatch = INT_MIN;
 int Fuzzy(const wchar_t* candLower, size_t n, const std::wstring& q, std::vector<int>* pos) {
     if (q.empty()) return 0;
     int score = 0;
@@ -142,7 +145,7 @@ int Fuzzy(const wchar_t* candLower, size_t n, const std::wstring& q, std::vector
             if (k == 0 || IsSep(candLower[k - 1])) { wordStart = k; break; }
             if ((int)k == prev + 1) break;  // keep contiguous runs
         }
-        if (found == std::wstring::npos) return -1;
+        if (found == std::wstring::npos) return kNoMatch;
         size_t k = found;
         if ((int)found != prev + 1 && wordStart != std::wstring::npos) k = wordStart;
         score += 1;
@@ -429,14 +432,14 @@ bool ScoreFile(const std::wstring& rel, const std::wstring& lower, const std::ws
     size_t fn = sl == std::wstring::npos ? 0 : sl + 1;
     std::vector<int> fpos;
     int sc = Fuzzy(lower.c_str() + fn, lower.size() - fn, q, pos ? &fpos : nullptr);
-    if (sc >= 0) {
+    if (sc != kNoMatch) {
         sc += 20;
         if (pos)
             for (int p : fpos) pos->push_back(p + (int)fn);
     } else {
         if (pos) pos->clear();
         sc = Fuzzy(lower, q, pos);
-        if (sc < 0) return false;
+        if (sc == kNoMatch) return false;
     }
     *score = sc - (int)std::min<size_t>(rel.size(), 60) / 12;  // shorter paths first
     return true;
@@ -575,9 +578,9 @@ void Refresh() {
             it.cmd = ID_FILE_RECENT0 + (int)i;
             if (PathEqualsI(r[i], M.folder)) it.key = L"current";
             it.score = Fuzzy(LowerW(it.label), q, &it.hlLabel);  // prefer matches in the folder name
-            if (it.score >= 0) it.score += 20;
+            if (it.score != kNoMatch) it.score += 20;
             else it.score = Fuzzy(LowerW(it.detail), q, &it.hlDetail);
-            if (it.score >= 0) g_items.push_back(it);
+            if (it.score != kNoMatch) g_items.push_back(it);
         }
         if (!q.empty())
             std::stable_sort(g_items.begin(), g_items.end(), [](const Item& a, const Item& b) { return a.score > b.score; });
@@ -595,7 +598,7 @@ void Refresh() {
             it.key = c.key;
             it.cmd = c.id;
             it.score = Fuzzy(LowerW(it.label), q, &it.hlLabel);
-            if (it.score >= 0) g_items.push_back(it);
+            if (it.score != kNoMatch) g_items.push_back(it);
         }
         for (size_t i = 0; i < g_settings.recentFolders.size(); ++i) {
             Item it;
@@ -604,7 +607,7 @@ void Refresh() {
             it.detail = g_settings.recentFolders[i];
             it.cmd = ID_FILE_RECENT0 + (int)i;
             it.score = Fuzzy(LowerW(it.label), q, &it.hlLabel);
-            if (it.score >= 0) g_items.push_back(it);
+            if (it.score != kNoMatch) g_items.push_back(it);
         }
         if (!q.empty())
             std::stable_sort(g_items.begin(), g_items.end(), [](const Item& a, const Item& b) { return a.score > b.score; });
