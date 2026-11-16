@@ -117,6 +117,7 @@ int PadL() { return S(10); }
 // Custom-drawn scrollbar, half the width of the system one.
 int SbWidth() { return std::max(S(4), (int)GetSystemMetricsForDpi(SM_CXVSCROLL, (UINT)g_dpi) / 2); }
 int PadT() { return S(4); }
+const UINT_PTR kAutoScrollTimer = 1;  // scrolls while a drag-selection is held at the top/bottom edge
 
 struct Terminal {
     HWND hwnd = nullptr;
@@ -151,7 +152,7 @@ struct Terminal {
 
     // ---- view ----
     int scroll = 0;  // lines scrolled back into history
-    bool hasSel = false, selecting = false;
+    bool hasSel = false, selecting = false, autoScrolling = false;
     int sbGrab = -1;  // while dragging the scrollbar thumb: mouse offset from the thumb top
     POINT selA{}, selB{};  // x = column boundary, y = absolute line (history + screen)
     bool eatChar = false;
@@ -688,6 +689,36 @@ struct Terminal {
         return POINT{col, ViewTop() + row};
     }
 
+    // While drag-selecting, how many lines to auto-scroll for a mouse at client y: negative scrolls up, positive
+    // down, 0 when the mouse is away from the top/bottom edge. Grows with the distance past the edge.
+    int AutoScrollLines(int y) const {
+        RECT rc;
+        GetClientRect(hwnd, &rc);
+        int zone = std::max(S(4), g_ef.lh / 3);
+        int over = y < zone ? zone - y : y >= rc.bottom - zone ? y - (rc.bottom - zone) + 1 : 0;
+        if (!over) return 0;
+        int n = std::min(5, 1 + over / std::max(1, 3 * g_ef.lh));
+        return y < zone ? -n : n;
+    }
+
+    // Extends the selection to the mouse, scrolling the view when it is dragged to (or past) the top/bottom edge.
+    // Only timer ticks scroll, so the speed doesn't depend on how much the mouse moves.
+    void DragSelect(POINT pt, bool tick) {
+        int n = AutoScrollLines(pt.y);
+        if (!n) {
+            if (autoScrolling) KillTimer(hwnd, kAutoScrollTimer);
+            autoScrolling = false;
+        } else if (tick) {
+            ScrollTo(ViewTop() + n);
+        } else if (!autoScrolling) {
+            autoScrolling = true;
+            SetTimer(hwnd, kAutoScrollTimer, 100, nullptr);
+        }
+        selB = CellAt(MAKELPARAM(pt.x, pt.y), true);
+        hasSel = selA.x != selB.x || selA.y != selB.y;
+        InvalidateRect(hwnd, nullptr, FALSE);
+    }
+
     void SelectWord(POINT p) {
         const Line& l = LineAt(p.y);
         int x = std::min((int)p.x, (int)l.size() - 1);
@@ -1048,16 +1079,30 @@ LRESULT CALLBACK TermProc(HWND h, UINT m, WPARAM w, LPARAM l) {
         if (t->sbGrab >= 0) {
             t->DragThumb(GET_Y_LPARAM(l));
         } else if (t->selecting) {
-            t->selB = t->CellAt(l, true);
-            t->hasSel = t->selA.x != t->selB.x || t->selA.y != t->selB.y;
-            InvalidateRect(h, nullptr, FALSE);
+            t->DragSelect(POINT{GET_X_LPARAM(l), GET_Y_LPARAM(l)}, false);
         }
         return 0;
+    case WM_TIMER:
+        if (w == kAutoScrollTimer) {
+            if (!t->selecting) {
+                KillTimer(h, kAutoScrollTimer);
+                t->autoScrolling = false;
+            } else {
+                POINT pt;
+                GetCursorPos(&pt);
+                ScreenToClient(h, &pt);
+                t->DragSelect(pt, true);
+            }
+            return 0;
+        }
+        break;
     case WM_LBUTTONUP:
         if (t->selecting || t->sbGrab >= 0) ReleaseCapture();
         return 0;
     case WM_CAPTURECHANGED:
         t->selecting = false;
+        t->autoScrolling = false;
+        KillTimer(h, kAutoScrollTimer);
         if (t->sbGrab >= 0) {
             t->sbGrab = -1;
             InvalidateRect(h, nullptr, FALSE);

@@ -581,6 +581,8 @@ def PaintWelcome(dc):
         for f in C.g_settings.recentFolders:
             lr = RECT(x, y, M.rcContent.right - S(16), y + S(22))
             Text(dc, f, lr, t.link, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_PATH_ELLIPSIS)
+            # Only the drawn text is clickable, not the empty space to its right.
+            lr.right = min(lr.right, lr.left + text_extent(dc, f).cx)
             M.welcomeLinks.append((lr, f))
             y += S(22)
 

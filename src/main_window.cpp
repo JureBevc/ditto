@@ -435,6 +435,10 @@ static void PaintWelcome(HDC dc) {
         for (auto& f : g_settings.recentFolders) {
             RECT lr = {x, y, M.rcContent.right - S(16), y + S(22)};
             Text(dc, f, lr, t.link, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_PATH_ELLIPSIS);
+            // Only the drawn text is clickable, not the empty space to its right.
+            SIZE sz;
+            GetTextExtentPoint32W(dc, f.c_str(), (int)f.size(), &sz);
+            lr.right = std::min<LONG>(lr.right, lr.left + sz.cx);
             M.welcomeLinks.push_back({lr, f});
             y += S(22);
         }

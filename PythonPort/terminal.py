@@ -140,6 +140,9 @@ def PadT():
     return C.S(4)
 
 
+kAutoScrollTimer = 1  # scrolls while a drag-selection is held at the top/bottom edge
+
+
 # parser states
 Ground, Esc, Csi, Osc, OscEsc, Str, StrEsc, Charset = range(8)
 
@@ -204,6 +207,7 @@ class Terminal:
         self.scroll = 0  # lines scrolled back into history
         self.hasSel = False
         self.selecting = False
+        self.autoScrolling = False
         self.sbGrab = -1  # while dragging the scrollbar thumb: mouse offset from the thumb top
         self.selA = (0, 0)  # (x, y): x = column boundary, y = absolute line (history + screen)
         self.selB = (0, 0)
@@ -944,6 +948,38 @@ class Terminal:
         row = max(0, min(self.rows - 1, 0 if y < 0 else _tdiv(y, ef.lh)))
         return (col, self.ViewTop() + row)
 
+    def AutoScrollLines(self, y):
+        """While drag-selecting, how many lines to auto-scroll for a mouse at client y: negative scrolls up,
+        positive down, 0 when the mouse is away from the top/bottom edge. Grows with the distance past the edge."""
+        rc = W.client_rect(self.hwnd)
+        lh = editor_view.g_ef.lh
+        zone = max(C.S(4), _tdiv(lh, 3))
+        if y < zone:
+            over = zone - y
+        elif y >= rc.bottom - zone:
+            over = y - (rc.bottom - zone) + 1
+        else:
+            return 0
+        n = min(5, 1 + _tdiv(over, max(1, 3 * lh)))
+        return -n if y < zone else n
+
+    def DragSelect(self, x, y, tick):
+        """Extends the selection to the mouse, scrolling the view when it is dragged to (or past) the top/bottom
+        edge. Only timer ticks scroll, so the speed doesn't depend on how much the mouse moves."""
+        n = self.AutoScrollLines(y)
+        if not n:
+            if self.autoScrolling:
+                W.KillTimer(self.hwnd, kAutoScrollTimer)
+            self.autoScrolling = False
+        elif tick:
+            self.ScrollTo(self.ViewTop() + n)
+        elif not self.autoScrolling:
+            self.autoScrolling = True
+            W.SetTimer(self.hwnd, kAutoScrollTimer, 100, None)
+        self.selB = self.CellAt(W.MAKELPARAM(x, y), True)
+        self.hasSel = self.selA != self.selB
+        W.InvalidateRect(self.hwnd, None, False)
+
     def SelectWord(self, p):
         l = self.LineAt(p[1])
         x = min(p[0], len(l) - 1)
@@ -1369,9 +1405,16 @@ def TermProc(h, m, w, l):
         if t.sbGrab >= 0:
             t.DragThumb(W.GET_Y_LPARAM(l))
         elif t.selecting:
-            t.selB = t.CellAt(l, True)
-            t.hasSel = t.selA != t.selB
-            W.InvalidateRect(h, None, False)
+            t.DragSelect(W.GET_X_LPARAM(l), W.GET_Y_LPARAM(l), False)
+        return 0
+    if m == W.WM_TIMER and w == kAutoScrollTimer:
+        if not t.selecting:
+            W.KillTimer(h, kAutoScrollTimer)
+            t.autoScrolling = False
+        else:
+            pt = W.cursor_pos()
+            W.ScreenToClient(h, byref(pt))
+            t.DragSelect(pt.x, pt.y, True)
         return 0
     if m == W.WM_LBUTTONUP:
         if t.selecting or t.sbGrab >= 0:
@@ -1379,6 +1422,8 @@ def TermProc(h, m, w, l):
         return 0
     if m == W.WM_CAPTURECHANGED:
         t.selecting = False
+        t.autoScrolling = False
+        W.KillTimer(h, kAutoScrollTimer)
         if t.sbGrab >= 0:
             t.sbGrab = -1
             W.InvalidateRect(h, None, False)
